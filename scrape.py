@@ -140,4 +140,76 @@ def matches_buy_box(lst: Listing, spec: Dict[str, Any]) -> bool:
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
-        """CREATE TABLE
+        """CREATE TABLE IF NOT EXISTS listings (
+                ad_id      TEXT PRIMARY KEY,
+                url        TEXT,
+                price      INTEGER,
+                year       INTEGER,
+                mileage    INTEGER,
+                color      TEXT,
+                location   TEXT,
+                first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_seen  TIMESTAMP,
+                hash       TEXT
+        );"""
+    )
+    return conn
+
+# -------------------------------------------------------------------------------------
+async def fetch_listings(browser: Browser) -> List[Listing]:
+    page: Page = await browser.new_page(user_agent=USER_AGENT)
+    await page.goto(BASE_URL, timeout=60_000)
+    await page.wait_for_selector("article.sf-search-ad")
+    cards = await page.locator("article.sf-search-ad").all_inner_htmls()
+    listings: List[Listing] = []
+    for card_html in cards:
+        lst = Listing.from_card(card_html)
+        if lst:
+            listings.append(lst)
+    await page.close()
+    return listings
+
+# -------------------------------------------------------------------------------------
+async def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+    spec = load_buy_box(BUY_BOX_PATH)
+    conn = init_db()
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=HEADLESS)
+        try:
+            logging.info("Fetching listings…")
+            listings = await fetch_listings(browser)
+            logging.info("Fetched %d listings", len(listings))
+
+            new_or_changed: List[Listing] = []
+            cur = conn.cursor()
+            for lst in listings:
+                if not matches_buy_box(lst, spec):
+                    continue
+                row = cur.execute("SELECT price, mileage FROM listings WHERE ad_id=?", (lst.ad_id,)).fetchone()
+                if row is None or row[0] != lst.price or row[1] != lst.mileage:
+                    new_or_changed.append(lst)
+                    cur.execute(
+                        "REPLACE INTO listings (ad_id, url, price, year, mileage, color, location, last_seen) "
+                        "VALUES (:ad_id, :url, :price, :year, :mileage, :color, :location, CURRENT_TIMESTAMP)",
+                        asdict(lst),
+                    )
+            conn.commit()
+            logging.info("%d new/changed listings stored", len(new_or_changed))
+
+            # Export delta for downstream LLM step
+            import json
+            if new_or_changed:
+                out = Path("delta_listings.json")
+                with out.open("w", encoding="utf-8") as fp:
+                    json.dump([asdict(l) for l in new_or_changed], fp, ensure_ascii=False, indent=2)
+                logging.info("Δ written → %s", out.resolve())
+            else:
+                logging.info("No new listings within buy‑box today.")
+        finally:
+            await browser.close()
+            conn.close()
+
+if __name__ == "__main__":
+    asyncio.run(main())
