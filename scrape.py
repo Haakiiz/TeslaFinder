@@ -54,11 +54,11 @@ from playwright.async_api import async_playwright, Browser, Page
 
 # ---------- CONFIG ------------------------------------------------------------------
 BASE_URL = "https://www.finn.no/mobility/search/car?location=20002&location=20061&location=20007&location=20018&location=20003&location=22034&location=20009&location=20008&model=1.8078.2000555"  # Tesla ModelY filter
-HEADLESS = True
+HEADLESS = False
 CRAWL_DELAY_SEC = 4
 DB_PATH = Path("listings.db")
 BUY_BOX_PATH = Path("buy_box.yaml")
-USER_AGENT = "ModelYHunterBot/1.0 (+https://github.com/yourname/modely-hunter)"
+USER_AGENT = "ModelYHunterBot/1.0 (+https://github.com/Haakiiz/TeslaFinder)"
 
 # -------------------------------------------------------------------------------------
 
@@ -87,16 +87,16 @@ class Listing:
         """Parse one listing card (raw HTML) → Listing or None if parse fails."""
         # NOTE: Selectors may need updating.
         try:
-            price_match = re.search(r"<span.*?class=\"price\"[^>]*>([0-9 ]+)</span>", card_html)
+            price_match = re.search(r"<span.*?class=\"price\"[^>]*>([0-9]+)</span>", card_html)
             year_match = re.search(r"(20[0-9]{2})", card_html)
-            km_match = re.search(r"([0-9 ]+)\s*km", card_html)
+            km_match = re.search(r"([0-9]+)\s*km", card_html)
             url_match = re.search(r"<a href=\"(https://www.finn.no/car/.*?\?)", card_html)
             ad_id_match = re.search(r"FINN-kode\s*</span>\s*<span[^>]*>([0-9]+)</span>", card_html)
             color_match = re.search(r"Farge</span>\s*<span[^>]*>([^<]+)</span>", card_html)
             location_match = re.search(r"<div class=\"ads__unit__content__list\">\s*<span>(.*?)</span>", card_html, re.S)
-            price = int(price_match.group(1).replace(" ", "")) if price_match else 0
+            price = int(price_match.group(1).replace("", "")) if price_match else 0
             year = int(year_match.group(1)) if year_match else 0
-            mileage = int(km_match.group(1).replace(" ", "")) if km_match else 0
+            mileage = int(km_match.group(1).replace("", "")) if km_match else 0
             url = url_match.group(1) if url_match else ""
             ad_id = ad_id_match.group(1) if ad_id_match else ""
             color = color_match.group(1).strip().lower() if color_match else ""
