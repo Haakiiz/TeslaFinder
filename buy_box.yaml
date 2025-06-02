@@ -1,0 +1,18 @@
+model: "Model Y"
+make: "Tesla"
+price_max: 500000      # in NOK
+year_min: 2022
+mileage_max: 40000     # in km
+color:
+  - "white"
+  - "black"
+fsd_required: true     # Full Self Driving must be included
+location_radius_km: 200
+location_center: "Oslo"
+extras:
+  - "Long Range"       # Optional: could be "Long Range", "Performance", etc.
+must_include_images: true
+exclude_keywords:
+  - "import"
+  - "skadet"
+  - "tidligere takst"
