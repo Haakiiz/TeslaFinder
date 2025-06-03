@@ -6,10 +6,13 @@ import json
 import os
 import sys
 import openai
+import anthropic
 
 # ---------- CONFIGURATION ------------------------------------------------------------
 # Ensure your OpenAI API key is set in the environment:
 #   export OPENAI_API_KEY="your_api_key_here"
+# Ensure your Anthropic API key is set in the environment:
+#   export ANTHROPIC_API_KEY="your_api_key_here"
 # The JSON produced by scrape.py:
 DELTA_PATH = "delta_listings.json"
 # If desired, redirect summary to a file:
@@ -74,13 +77,37 @@ def call_openai(prompt_text):
                 {"role": "user", "content": prompt_text}
             ],
             max_tokens=600,
-            temperature=0.7,
+            temperature=0.7
         )
     except Exception as e:
         print(f"OpenAI API error: {e}")
         sys.exit(1)
 
-    return response['choices'][0]['message']['content']
+    return response.choices[0].message["content"]
+
+
+def call_anthropic(prompt_text):
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        print("Error: ANTHROPIC_API_KEY environment variable not set.")
+        sys.exit(1)
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.completions.create(
+            model="claude-sonnet-4-20250514",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt_text}
+            ],
+            max_tokens=1024,
+            temperature=0.7
+        )
+    except Exception as e:
+        print(f"Anthropic API error: {e}")
+        sys.exit(1)
+
+    return response.choices[0].message["content"]
 
 
 # ---------- MAIN --------------------------------------------------------------------
@@ -92,6 +119,8 @@ if __name__ == "__main__":
         summary = "No new or changed listings today."
     else:
         summary = call_openai(prompt_text)
+        # If you prefer Anthropic instead of OpenAI, uncomment the next line:
+        # summary = call_anthropic(prompt_text)
 
     # Write to stdout and optionally to a file
     print(summary)
