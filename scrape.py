@@ -1,12 +1,23 @@
 #!/usr/bin/env python3
 """
-Tesla Model Y Hunter – FINN.no scraper (updated selectors)
+Tesla Model Y Hunter – FINN.no scraper (final adjustments)
 ========================================================
-Author: Dr Peter Norvig (2025‑06‑02, updated 2025‑06‑02 23:00)
+Author: Dr Peter Norvig (2025-06-02, updated 2025-06-03 13:00)
 
-Updated for June 2025 FINN.no markup: Now uses `.sf-search-ad` for articles, new field selectors as discovered via LLM markup analysis.
+This script collects Tesla Model Y listings from FINN.no, applies a YAML-defined
+"buy box" filter, and stores the surviving ads in an SQLite database. Only ads
+that are *new* or whose price/mileage has changed since the last run are
+persisted; the delta is later consumed by `openai_summarise.py` for the daily
+LLM call.
 
-(Other docstring details unchanged...)
+Usage (inside virtualenv):
+    python scrape.py
+
+Prerequisites (once per machine):
+    playwright install chromium
+
+Remember (per Håkon’s workflow):  ``pip freeze > requirements.txt`` after you
+first install or upgrade packages.
 """
 from __future__ import annotations
 
@@ -20,35 +31,17 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List
 
-try:
-    import yaml
-except Exception:  # pragma: no cover - optional dependency for tests
-    yaml = None
+import yaml
 from math import radians, cos, sin, asin, sqrt
-try:
-    from playwright.async_api import async_playwright, Browser, Page
-except Exception:  # pragma: no cover - optional dependency for tests
-    async_playwright = Browser = Page = None
+from playwright.async_api import async_playwright, Browser, Page
 
 # ---------- CONFIG ------------------------------------------------------------------
-BASE_URL = "https://www.finn.no/car/used/search.html?make=0.8076&model=1.8076.24647"  # Tesla Model Y filter
-HEADLESS = True
+BASE_URL = "https://www.finn.no/mobility/search/car?location=20002&location=20061&location=20007&location=20018&location=20003&location=22034&location=20009&location=20008&model=1.8078.2000555"
+HEADLESS = False
 CRAWL_DELAY_SEC = 4
 DB_PATH = Path("listings.db")
 BUY_BOX_PATH = Path("buy_box.yaml")
-USER_AGENT = "ModelYHunterBot/1.0 (+https://github.com/yourname/modely-hunter)"
-
-# Norwegian → English color mapping for filtering logic
-COLOR_MAP = {
-    "svart": "black",
-    "sort": "black",
-    "hvit": "white",
-    "blå": "blue",
-    "rød": "red",
-    "grå": "gray",
-    "sølv": "silver",
-    "brun": "brown",
-}
+USER_AGENT = "ModelYHunterBot/1.0 (+https://github.com/Haakiiz/TeslaFinder)"
 
 # -------------------------------------------------------------------------------------
 
@@ -73,8 +66,9 @@ class Listing:
     title: str | None = None
 
     @classmethod
+    @classmethod
     def from_card(cls, card_html: str) -> "Listing | None":
-        """Parse one listing card (raw HTML) → Listing or None if parse fails."""
+        """Parse one listing card (HTML) → Listing or None if parse fails."""
         try:
             # --- Ad ID, URL, Title ---
             ad_id_match = re.search(r'<a[^>]*class="sf-search-ad-link"[^>]*id="([0-9]+)"', card_html)
@@ -82,31 +76,23 @@ class Listing:
             title_match = re.search(r'<a[^>]*class="sf-search-ad-link"[^>]*>([^<]+)</a>', card_html)
             ad_id = ad_id_match.group(1) if ad_id_match else ""
             url = url_match.group(1) if url_match else ""
-            # FINN.no returns URLs relative to domain; make them absolute
-            if url and url.startswith("/"):
-                url = f"https://www.finn.no{url}"
             title = title_match.group(1).strip() if title_match else ""
 
             # --- Price ---
-            price_match = re.search(r'<div class="mb-4">\s*<span[^>]*class="t3 font-bold[^"]*"[^>]*>([0-9\xa0 ]+)\s*kr</span>', card_html)
+            price_match = re.search(r'<span[^>]*class="t3 font-bold inline-block[^"]*"[^>]*>([0-9\xa0 ]+)\s*kr</span>', card_html)
             price = int(price_match.group(1).replace("\xa0", "").replace(" ", "")) if price_match else 0
 
-            # --- Year & Mileage ---
-            spec_match = re.search(r'<span[^>]*class="text-caption font-bold mb-8"[^>]*>([^<]+)</span>', card_html)
+            # --- Year & Mileage: robust, ignores class order and bullet style ---
             year = 0
             mileage = 0
-            if spec_match:
-                # Looks like: "2022 ∙ 18 000 km ∙ Automat ∙ El"
-                specs = spec_match.group(1).split("∙")
-                if len(specs) >= 2:
-                    year = int(specs[0].strip())
-                    mileage_txt = specs[1].replace("\xa0", "").replace("km", "").replace(" ", "").strip()
-                    try:
-                        mileage = int(mileage_txt)
-                    except Exception:
-                        mileage = 0
+            ym_match = re.search(
+                r'(\d{4})\s*[∙•.]\s*([0-9 \xa0&nbsp;]+)\s*km', card_html, re.IGNORECASE)
+            if ym_match:
+                year = int(ym_match.group(1))
+                mileage_raw = ym_match.group(2)
+                mileage = int(re.sub(r'[^0-9]', '', mileage_raw))  # strip spaces, NBSP, &nbsp;
 
-            # --- Color (heuristic) ---
+            # --- Color (heuristic from description) ---
             color = ""
             color_match = re.search(r'<span[^>]*class="text-caption mb-4 s-text-subtle[^"]*"[^>]*>([^<]*)</span>', card_html)
             color_text = color_match.group(1).strip().lower() if color_match else ""
@@ -133,30 +119,31 @@ class Listing:
             logging.debug("Parse error: %s", e)
             return None
 
+
 # -------------------------------------------------------------------------------------
 
 def load_buy_box(path: Path) -> Dict[str, Any]:
-    if yaml is None:
-        raise RuntimeError("PyYAML is required to load buy_box.yaml")
     with path.open() as fp:
         return yaml.safe_load(fp)
 
 
 def matches_buy_box(lst: Listing, spec: Dict[str, Any]) -> bool:
     if lst.price > spec["price_max"]:
+        print(f"Filtered by price: {lst.price}")
         return False
     if lst.year < spec["year_min"]:
+        print(f"Filtered by year: {lst.year}")
         return False
     if lst.mileage > spec["mileage_max"]:
+        print(f"Filtered by mileage: {lst.mileage}")
         return False
-    color_norm = COLOR_MAP.get(lst.color.lower(), lst.color.lower()) if lst.color else ""
-    if color_norm and color_norm not in spec["color"]:
+    if lst.color and lst.color not in [c.lower() for c in spec["color"]]:
+        print(f"Filtered by color: {lst.color}")
         return False
-    # Simple keyword exclusions in title or url
     for bad in spec.get("exclude_keywords", []):
         if bad.lower() in lst.title.lower() or bad.lower() in lst.url.lower():
+            print(f"Filtered by keyword: {bad}")
             return False
-    # Location filtering (requires lat/long scraping – omitted here)
     return True
 
 # -------------------------------------------------------------------------------------
@@ -181,16 +168,46 @@ def init_db():
 
 # -------------------------------------------------------------------------------------
 async def fetch_listings(browser: Browser) -> List[Listing]:
-    page: Page = await browser.new_page(user_agent=USER_AGENT)
-    await page.goto(BASE_URL, timeout=60_000)
-    await page.wait_for_selector("article.sf-search-ad")
-    cards = await page.locator("article.sf-search-ad").all_inner_htmls()
     listings: List[Listing] = []
-    for card_html in cards:
-        lst = Listing.from_card(card_html)
-        if lst:
-            listings.append(lst)
-    await page.close()
+    page_num = 1
+    printed_sample = False
+    while True:
+        page_url = BASE_URL + f"&page={page_num}"
+        page: Page = await browser.new_page(user_agent=USER_AGENT)
+        await page.goto(page_url, timeout=60_000)
+        try:
+            await page.wait_for_selector("article.sf-search-ad", timeout=10000)
+        except Exception:
+            await page.close()
+            break  # No results; end of pages
+
+        elements = await page.locator("article.sf-search-ad").element_handles()
+        cards_html = []
+        for el in elements:
+            card_html = await el.inner_html()
+            if not printed_sample:
+                print("=== SAMPLE CARD HTML ===")
+                print(card_html)
+                print("=== END SAMPLE ===")
+                printed_sample = True
+            cards_html.append(card_html)
+
+        if not cards_html:
+            await page.close()
+            break
+
+        for card_html in cards_html:
+            lst = Listing.from_card(card_html)
+            if lst:
+                listings.append(lst)
+        logging.info(f"Fetched {len(cards_html)} listings from page {page_num}")
+
+        next_button = await page.query_selector("a[aria-label='Neste']")
+        await page.close()
+        if not next_button:
+            break
+        page_num += 1
+        time.sleep(CRAWL_DELAY_SEC)
     return listings
 
 # -------------------------------------------------------------------------------------
@@ -222,7 +239,6 @@ async def main():
             conn.commit()
             logging.info("%d new/changed listings stored", len(new_or_changed))
 
-            # Export delta for downstream LLM step
             import json
             if new_or_changed:
                 out = Path("delta_listings.json")
