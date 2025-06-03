@@ -64,6 +64,9 @@ class Listing:
             title_match = re.search(r'<a[^>]*class="sf-search-ad-link"[^>]*>([^<]+)</a>', card_html)
             ad_id = ad_id_match.group(1) if ad_id_match else ""
             url = url_match.group(1) if url_match else ""
+            # FINN.no returns URLs relative to domain; make them absolute
+            if url and url.startswith("/"):
+                url = f"https://www.finn.no{url}"
             title = title_match.group(1).strip() if title_match else ""
 
             # --- Price ---
