@@ -65,64 +65,51 @@ class Listing:
     longitude: float | None = None
     title: str | None = None
 
-
-
     @classmethod
     def from_card(cls, card_html: str) -> "Listing | None":
         """Parse one listing card (HTML) → Listing or None if parse fails."""
         try:
-            # --- Ad ID, URL, Title ---
-            ad_id_match = re.search(
-                r'<a[^>]*class="[^"]*sf-search-ad-link[^"]*"[^>]*id="(\d+)"', card_html)
-            url_match = re.search(
-                r'<a[^>]*class="[^"]*sf-search-ad-link[^"]*"[^>]*href="([^"]+)"', card_html)
-            title_match = re.search(
-                r'<a[^>]*class="[^"]*sf-search-ad-link[^"]*"[^>]*>.*?</span>([^<]+)</a>', card_html)
-            ad_id = ad_id_match.group(1) if ad_id_match else ""
-            url = url_match.group(1) if url_match else ""
-            title = title_match.group(1).strip() if title_match else ""
+            # --- Ad ID, URL, Title ----------------------------------------------------
+            link_match = re.search(
+                r'<a[^>]*class="[^"]*sf-search-ad-link[^"]*"[^>]*href="([^"]+)"[^>]*id="(\d+)"[^>]*>(?:<span[^>]*></span>)?([^<]+)</a>',
+                card_html,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if not link_match:
+                return None  # critical data missing
+            url, ad_id, title = link_match.groups()
+            title = title.strip()
 
-            # --- Price ---
+            # --- Price ----------------------------------------------------------------
             price_match = re.search(
-                r'<span[^>]*class="[^"]*t3[^"]*font-bold[^"]*inline-block[^"]*"[^>]*>([0-9\xa0&nbsp; ]+)\s*kr</span>',
-                card_html)
-            if price_match:
-                price_raw = price_match.group(1)
-                # Remove any HTML entity or non-digit
-                price = int(re.sub(r'[^\d]', '', price_raw))
-            else:
-                price = 0
+                r'<span[^>]*class="[^"]*t3[^"]*font-bold[^"]*inline-block[^"]*"[^>]*>([0-9\u00A0&nbsp; ]+)\s*kr',
+                card_html,
+                re.IGNORECASE,
+            )
+            price = int(re.sub(r"[^\d]", "", price_match.group(1))) if price_match else 0
 
-            # --- Year & Mileage: now handles both \xa0 and &nbsp; entities ---
+            # --- Year & Mileage --------------------------------------------------------
             year = 0
             mileage = 0
             ym_match = re.search(
-                r'<span[^>]*class="[^"]*text-caption[^"]*font-bold[^"]*mb-8[^"]*"[^>]*>'
-                r'(\d{4})\s*[∙•]\s*([0-9\xa0&nbsp; ]+)\s*km',
-                card_html, re.IGNORECASE)
+                r'(\d{4})\s*[∙•.\u2219\u2022]\s*([0-9\u00A0&nbsp; ]+)\s*km',
+                card_html,
+                re.IGNORECASE,
+            )
             if ym_match:
                 year = int(ym_match.group(1))
-                mileage_raw = ym_match.group(2)
-                # Strip anything non-numeric (digits only)
-                mileage = int(re.sub(r'[^\d]', '', mileage_raw))
+                mileage = int(re.sub(r"[^\d]", "", ym_match.group(2)))
 
-            # --- Color (heuristic; not always present in search card) ---
-            color = ""
-            color_match = re.search(
-                r'<span[^>]*class="text-caption mb-4 s-text-subtle[^"]*"[^>]*>([^<]*)</span>',
-                card_html)
-            if color_match:
-                color_text = color_match.group(1).strip().lower()
-                for c in ("svart", "sort", "hvit", "blå", "rød", "grå", "sølv", "brun"):
-                    if c in color_text:
-                        color = c
-                        break
-
-            # --- Location ---
+            # --- Location --------------------------------------------------------------
             loc_match = re.search(
-                r'<div class="text-detail flex-col flex s-text-subtle">\s*<span[^>]*>([^<]*)</span>',
-                card_html)
+                r'<div class="text-detail flex-col flex s-text-subtle">\s*<span[^>]*>([^<]+)</span>',
+                card_html,
+                re.IGNORECASE,
+            )
             location = loc_match.group(1).strip() if loc_match else ""
+
+            # --- Color (not present in card view) --------------------------------------
+            color = ""
 
             return cls(
                 ad_id=ad_id,
@@ -137,7 +124,6 @@ class Listing:
         except Exception as e:
             logging.debug("Parse error: %s", e)
             return None
-
 
 
 # -------------------------------------------------------------------------------------
@@ -190,31 +176,26 @@ def init_db():
 async def fetch_listings(browser: Browser) -> List[Listing]:
     listings: List[Listing] = []
     page_num = 1
-    printed_sample = False
     while True:
         page_url = BASE_URL + f"&page={page_num}"
         page: Page = await browser.new_page(user_agent=USER_AGENT)
         await page.goto(page_url, timeout=60_000)
+        # Attempt to select listing cards; if none found, break loop
         try:
             await page.wait_for_selector("article.sf-search-ad", timeout=10000)
         except Exception:
             await page.close()
-            break  # No results; end of pages
+            break  # No results on this page, end pagination
 
         elements = await page.locator("article.sf-search-ad").element_handles()
+        if not elements:
+            await page.close()
+            break  # No more listings, exit
+
         cards_html = []
         for el in elements:
             card_html = await el.inner_html()
-            if not printed_sample:
-                print("=== SAMPLE CARD HTML ===")
-                print(card_html)
-                print("=== END SAMPLE ===")
-                printed_sample = True
             cards_html.append(card_html)
-
-        if not cards_html:
-            await page.close()
-            break
 
         for card_html in cards_html:
             lst = Listing.from_card(card_html)
@@ -222,10 +203,7 @@ async def fetch_listings(browser: Browser) -> List[Listing]:
                 listings.append(lst)
         logging.info(f"Fetched {len(cards_html)} listings from page {page_num}")
 
-        next_button = await page.query_selector("a[aria-label='Neste']")
         await page.close()
-        if not next_button:
-            break
         page_num += 1
         time.sleep(CRAWL_DELAY_SEC)
     return listings
