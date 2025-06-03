@@ -133,6 +133,12 @@ def load_buy_box(path: Path) -> Dict[str, Any]:
         return yaml.safe_load(fp)
 
 
+COLOR_ALIASES = {
+    "svart": "black",
+    "sort": "black",
+}
+
+
 def matches_buy_box(lst: Listing, spec: Dict[str, Any]) -> bool:
     if lst.price > spec["price_max"]:
         print(f"Filtered by price: {lst.price}")
@@ -143,9 +149,14 @@ def matches_buy_box(lst: Listing, spec: Dict[str, Any]) -> bool:
     if lst.mileage > spec["mileage_max"]:
         print(f"Filtered by mileage: {lst.mileage}")
         return False
-    if lst.color and lst.color not in [c.lower() for c in spec["color"]]:
+
+    color = lst.color.lower()
+    color = COLOR_ALIASES.get(color, color)
+    allowed_colors = [c.lower() for c in spec["color"]]
+    if color and color not in allowed_colors:
         print(f"Filtered by color: {lst.color}")
         return False
+
     for bad in spec.get("exclude_keywords", []):
         if bad.lower() in lst.title.lower() or bad.lower() in lst.url.lower():
             print(f"Filtered by keyword: {bad}")
