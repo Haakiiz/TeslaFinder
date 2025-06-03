@@ -20,9 +20,15 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List
 
-import yaml
+try:
+    import yaml
+except Exception:  # pragma: no cover - optional dependency for tests
+    yaml = None
 from math import radians, cos, sin, asin, sqrt
-from playwright.async_api import async_playwright, Browser, Page
+try:
+    from playwright.async_api import async_playwright, Browser, Page
+except Exception:  # pragma: no cover - optional dependency for tests
+    async_playwright = Browser = Page = None
 
 # ---------- CONFIG ------------------------------------------------------------------
 BASE_URL = "https://www.finn.no/car/used/search.html?make=0.8076&model=1.8076.24647"  # Tesla Model Y filter
@@ -31,6 +37,18 @@ CRAWL_DELAY_SEC = 4
 DB_PATH = Path("listings.db")
 BUY_BOX_PATH = Path("buy_box.yaml")
 USER_AGENT = "ModelYHunterBot/1.0 (+https://github.com/yourname/modely-hunter)"
+
+# Norwegian → English color mapping for filtering logic
+COLOR_MAP = {
+    "svart": "black",
+    "sort": "black",
+    "hvit": "white",
+    "blå": "blue",
+    "rød": "red",
+    "grå": "gray",
+    "sølv": "silver",
+    "brun": "brown",
+}
 
 # -------------------------------------------------------------------------------------
 
@@ -118,6 +136,8 @@ class Listing:
 # -------------------------------------------------------------------------------------
 
 def load_buy_box(path: Path) -> Dict[str, Any]:
+    if yaml is None:
+        raise RuntimeError("PyYAML is required to load buy_box.yaml")
     with path.open() as fp:
         return yaml.safe_load(fp)
 
@@ -129,7 +149,8 @@ def matches_buy_box(lst: Listing, spec: Dict[str, Any]) -> bool:
         return False
     if lst.mileage > spec["mileage_max"]:
         return False
-    if lst.color and lst.color not in spec["color"]:
+    color_norm = COLOR_MAP.get(lst.color.lower(), lst.color.lower()) if lst.color else ""
+    if color_norm and color_norm not in spec["color"]:
         return False
     # Simple keyword exclusions in title or url
     for bad in spec.get("exclude_keywords", []):
