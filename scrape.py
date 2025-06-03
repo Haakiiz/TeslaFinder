@@ -65,45 +65,64 @@ class Listing:
     longitude: float | None = None
     title: str | None = None
 
-    @classmethod
+
+
     @classmethod
     def from_card(cls, card_html: str) -> "Listing | None":
         """Parse one listing card (HTML) → Listing or None if parse fails."""
         try:
             # --- Ad ID, URL, Title ---
-            ad_id_match = re.search(r'<a[^>]*class="sf-search-ad-link"[^>]*id="([0-9]+)"', card_html)
-            url_match = re.search(r'<a[^>]*class="sf-search-ad-link"[^>]*href="([^"]+)"', card_html)
-            title_match = re.search(r'<a[^>]*class="sf-search-ad-link"[^>]*>([^<]+)</a>', card_html)
+            ad_id_match = re.search(
+                r'<a[^>]*class="[^"]*sf-search-ad-link[^"]*"[^>]*id="(\d+)"', card_html)
+            url_match = re.search(
+                r'<a[^>]*class="[^"]*sf-search-ad-link[^"]*"[^>]*href="([^"]+)"', card_html)
+            title_match = re.search(
+                r'<a[^>]*class="[^"]*sf-search-ad-link[^"]*"[^>]*>.*?</span>([^<]+)</a>', card_html)
             ad_id = ad_id_match.group(1) if ad_id_match else ""
             url = url_match.group(1) if url_match else ""
             title = title_match.group(1).strip() if title_match else ""
 
             # --- Price ---
-            price_match = re.search(r'<span[^>]*class="t3 font-bold inline-block[^"]*"[^>]*>([0-9\xa0 ]+)\s*kr</span>', card_html)
-            price = int(price_match.group(1).replace("\xa0", "").replace(" ", "")) if price_match else 0
+            price_match = re.search(
+                r'<span[^>]*class="[^"]*t3[^"]*font-bold[^"]*inline-block[^"]*"[^>]*>([0-9\xa0&nbsp; ]+)\s*kr</span>',
+                card_html)
+            if price_match:
+                price_raw = price_match.group(1)
+                # Remove any HTML entity or non-digit
+                price = int(re.sub(r'[^\d]', '', price_raw))
+            else:
+                price = 0
 
-            # --- Year & Mileage: robust, ignores class order and bullet style ---
+            # --- Year & Mileage: now handles both \xa0 and &nbsp; entities ---
             year = 0
             mileage = 0
             ym_match = re.search(
-                r'(\d{4})\s*[∙•.]\s*([0-9 \xa0&nbsp;]+)\s*km', card_html, re.IGNORECASE)
+                r'<span[^>]*class="[^"]*text-caption[^"]*font-bold[^"]*mb-8[^"]*"[^>]*>'
+                r'(\d{4})\s*[∙•]\s*([0-9\xa0&nbsp; ]+)\s*km',
+                card_html, re.IGNORECASE)
             if ym_match:
                 year = int(ym_match.group(1))
                 mileage_raw = ym_match.group(2)
-                mileage = int(re.sub(r'[^0-9]', '', mileage_raw))  # strip spaces, NBSP, &nbsp;
+                # Strip anything non-numeric (digits only)
+                mileage = int(re.sub(r'[^\d]', '', mileage_raw))
 
-            # --- Color (heuristic from description) ---
+            # --- Color (heuristic; not always present in search card) ---
             color = ""
-            color_match = re.search(r'<span[^>]*class="text-caption mb-4 s-text-subtle[^"]*"[^>]*>([^<]*)</span>', card_html)
-            color_text = color_match.group(1).strip().lower() if color_match else ""
-            for c in ("svart", "sort", "hvit", "blå", "rød", "grå", "sølv", "brun"):
-                if c in color_text:
-                    color = c
-                    break
+            color_match = re.search(
+                r'<span[^>]*class="text-caption mb-4 s-text-subtle[^"]*"[^>]*>([^<]*)</span>',
+                card_html)
+            if color_match:
+                color_text = color_match.group(1).strip().lower()
+                for c in ("svart", "sort", "hvit", "blå", "rød", "grå", "sølv", "brun"):
+                    if c in color_text:
+                        color = c
+                        break
 
             # --- Location ---
-            loc_match = re.search(r'<div class="text-detail flex-col flex s-text-subtle">\s*<span[^>]*>([^<]*)</span>', card_html)
-            location = loc_match.group(1).split(" ∙ ")[0].strip() if loc_match else ""
+            loc_match = re.search(
+                r'<div class="text-detail flex-col flex s-text-subtle">\s*<span[^>]*>([^<]*)</span>',
+                card_html)
+            location = loc_match.group(1).strip() if loc_match else ""
 
             return cls(
                 ad_id=ad_id,
@@ -118,6 +137,7 @@ class Listing:
         except Exception as e:
             logging.debug("Parse error: %s", e)
             return None
+
 
 
 # -------------------------------------------------------------------------------------
