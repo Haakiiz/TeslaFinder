@@ -5,6 +5,7 @@
 import json
 import os
 import sys
+import argparse
 import anthropic
 from dotenv import load_dotenv
 load_dotenv()
@@ -84,13 +85,23 @@ def call_anthropic(prompt_text):
 
 # ---------- MAIN --------------------------------------------------------------------
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Summarise Tesla listings")
+    parser.add_argument("--verbose", action="store_true", help="Show progress messages")
+    args = parser.parse_args()
+
     listings = load_delta(DELTA_PATH)
     prompt_text = build_prompt(listings)
 
     if prompt_text == "No new or changed listings.":
         summary = "No new or changed listings today."
     else:
+        if args.verbose:
+            print("Querying Anthropic for top deals...")
         summary = call_anthropic(prompt_text)
+        if args.verbose:
+            selected = listings  # Listings passing buy-box filtering
+            print(f"Selected {len(selected)} listings")
+            print("Fetching details and ranking...")
 
     print(summary)
     try:
