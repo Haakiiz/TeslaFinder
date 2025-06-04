@@ -7,6 +7,7 @@ import os
 import sys
 import anthropic
 from dotenv import load_dotenv
+from tqdm import tqdm
 load_dotenv()
 
 # ---------- CONFIGURATION ------------------------------------------------------------
@@ -44,8 +45,8 @@ def build_prompt(listings):
                   "model year (newer is better), and mileage (lower is better). Provide concise justifications.")
     prompt.append("Below are the listings (ad_id | title | year | mileage | price | location | url):")
 
-    # List each entry
-    for entry in listings:
+    # List each entry with progress
+    for entry in tqdm(listings, desc="Fetching listings"):
         ad_id = entry.get("ad_id", "")
         title = entry.get("title", "")
         year = entry.get("year", 0)
