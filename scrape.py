@@ -1,60 +1,39 @@
 #!/usr/bin/env python3
 """
-Tesla Model Y Hunter – FINN.no scraper (final adjustments)
-========================================================
+Tesla Model Y Hunter – FINN.no scraper
+
 Author: Dr Peter Norvig (2025-06-02, updated 2025-06-03 13:00)
-
-This script collects Tesla Model Y listings from FINN.no, applies a YAML-defined
-"buy box" filter, and stores the surviving ads in an SQLite database. Only ads
-that are *new* or whose price/mileage has changed since the last run are
-persisted; the delta is later consumed by `openai_summarise.py` for the daily
-LLM call.
-
-Usage (inside virtualenv):
-    python scrape.py
-
-Prerequisites (once per machine):
-    playwright install chromium
-
-Remember (per Håkon’s workflow):  ``pip freeze > requirements.txt`` after you
-first install or upgrade packages.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import asyncio
 import logging
 import re
 import sqlite3
-import sys
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List
 
-try:
-    import yaml
-except Exception:  # pragma: no cover - allow import without PyYAML during tests
-    yaml = None  # type: ignore
-
+import yaml
 from math import radians, cos, sin, asin, sqrt
-try:
-    from playwright.async_api import async_playwright, Browser, Page
-except Exception:  # pragma: no cover - playwright may be missing in CI
-    async_playwright = None  # type: ignore
-    Browser = Page = None  # type: ignore
+from playwright.async_api import async_playwright, Browser, Page
 
 # ---------- CONFIG ------------------------------------------------------------------
-BASE_URL = "https://www.finn.no/mobility/search/car?body_type=2&body_type=3&body_type=4&body_type=11&fuel=4&location=0.20002&location=0.20061&location=0.22034&location=0.20007&location=0.20003&mileage_to=100000&price_to=350000&registration_class=1&sales_form=2&sales_form=1&year_from=2020"
+BASE_URL = (
+    "https://www.finn.no/mobility/search/car"
+    "?body_type=2&body_type=3&body_type=4&body_type=11&fuel=4"
+    "&location=0.20002&location=0.20061&location=0.22034&location=0.20007&location=0.20003"
+    "&mileage_to=100000&price_to=350000&registration_class=1"
+    "&sales_form=2&sales_form=1&year_from=2020"
+)
 HEADLESS = True
 CRAWL_DELAY_SEC = 4
 DB_PATH = Path("listings.db")
 BUY_BOX_PATH = Path("buy_box.yaml")
 USER_AGENT = "ModelYHunterBot/1.0 (+https://github.com/Haakiiz/TeslaFinder)"
 
-# -------------------------------------------------------------------------------------
-
 def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Distance between two lat/lon points in kilometres."""
     r = 6371.0
     d_lat, d_lon = radians(lat2 - lat1), radians(lon2 - lon1)
     a = sin(d_lat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(d_lon / 2) ** 2
@@ -75,197 +54,164 @@ class Listing:
 
     @classmethod
     def from_card(cls, card_html: str) -> "Listing | None":
-        """Parse one listing card (HTML) → Listing or None if parse fails."""
         try:
-            # --- Ad ID, URL, Title ----------------------------------------------------
-            link_match = re.search(
-                r'<a[^>]*class="[^"]*sf-search-ad-link[^"]*"[^>]*href="([^"]+)"[^>]*id="(\d+)"[^>]*>(?:<span[^>]*></span>)?([^<]+)</a>',
-                card_html,
-                re.IGNORECASE | re.DOTALL,
+            link_re = (
+                r'<a[^>]*class="[^"]*sf-search-ad-link[^"]*"[^>]*'
+                r'href="([^"]+)"[^>]*id="(\d+)"[^>]*>(?:<span[^>]*></span>)?([^<]+)</a>'
             )
-            if not link_match:
-                return None  # critical data missing
-            url, ad_id, title = link_match.groups()
+            m = re.search(link_re, card_html, re.IGNORECASE | re.DOTALL)
+            if not m:
+                return None
+            url, ad_id, title = m.groups()
             title = title.strip()
 
-            # --- Price ----------------------------------------------------------------
-            price_match = re.search(
-                r'<span[^>]*class="[^"]*t3[^"]*font-bold[^"]*inline-block[^"]*"[^>]*>([0-9\u00A0&nbsp; ]+)\s*kr',
-                card_html,
-                re.IGNORECASE,
+            price_re = (
+                r'<span[^>]*class="[^"]*t3[^"]*font-bold[^"]*inline-block[^"]*"[^>]*>'
+                r'([0-9\u00A0&nbsp; ]+)\s*kr'
             )
-            price = int(re.sub(r"[^\d]", "", price_match.group(1))) if price_match else 0
+            pm = re.search(price_re, card_html, re.IGNORECASE)
+            price = int(re.sub(r"[^\d]", "", pm.group(1))) if pm else 0
 
-            # --- Year & Mileage --------------------------------------------------------
-            year = 0
-            mileage = 0
-            ym_match = re.search(
+            ym = re.search(
                 r'(\d{4})\s*[∙•.\u2219\u2022]\s*([0-9\u00A0&nbsp; ]+)\s*km',
-                card_html,
-                re.IGNORECASE,
+                card_html, re.IGNORECASE
             )
-            if ym_match:
-                year = int(ym_match.group(1))
-                mileage = int(re.sub(r"[^\d]", "", ym_match.group(2)))
+            year = int(ym.group(1)) if ym else 0
+            mileage = int(re.sub(r"[^\d]", "", ym.group(2))) if ym else 0
 
-            # --- Location --------------------------------------------------------------
-            loc_match = re.search(
+            loc = re.search(
                 r'<div class="text-detail flex-col flex s-text-subtle">\s*<span[^>]*>([^<]+)</span>',
-                card_html,
-                re.IGNORECASE,
+                card_html, re.IGNORECASE
             )
-            location = loc_match.group(1).strip() if loc_match else ""
-
-            # --- Color (not present in card view) --------------------------------------
+            location = loc.group(1).strip() if loc else ""
             color = ""
 
-            return cls(
-                ad_id=ad_id,
-                url=url,
-                price=price,
-                year=year,
-                mileage=mileage,
-                color=color,
-                location=location,
-                title=title,
-            )
+            return cls(ad_id, url, price, year, mileage, color, location, title=title)
         except Exception as e:
             logging.debug("Parse error: %s", e)
             return None
 
-
-# -------------------------------------------------------------------------------------
-
 def load_buy_box(path: Path) -> Dict[str, Any]:
-    if yaml is None:
-        raise RuntimeError("PyYAML is required to load the buy box spec")
-    with path.open() as fp:
-        return yaml.safe_load(fp)
-
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 def matches_buy_box(lst: Listing, spec: Dict[str, Any]) -> bool:
     if lst.price > spec["price_max"]:
-        print(f"Filtered by price: {lst.price}")
         return False
     if lst.year < spec["year_min"]:
-        print(f"Filtered by year: {lst.year}")
         return False
     if lst.mileage > spec["mileage_max"]:
-        print(f"Filtered by mileage: {lst.mileage}")
         return False
     if lst.color:
         allowed = [c.lower() for c in spec.get("color", [])]
         if "black" in allowed:
             allowed.extend(["svart", "sort"])
         if allowed and lst.color.lower() not in allowed:
-            print(f"Filtered by color: {lst.color}")
             return False
     for bad in spec.get("exclude_keywords", []):
-        if bad.lower() in lst.title.lower() or bad.lower() in lst.url.lower():
-            print(f"Filtered by keyword: {bad}")
+        if bad.lower() in (lst.title or "").lower() or bad.lower() in lst.url.lower():
             return False
     return True
-
-# -------------------------------------------------------------------------------------
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         """CREATE TABLE IF NOT EXISTS listings (
-                ad_id      TEXT PRIMARY KEY,
-                url        TEXT,
-                price      INTEGER,
-                year       INTEGER,
-                mileage    INTEGER,
-                color      TEXT,
-                location   TEXT,
-                first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_seen  TIMESTAMP,
-                hash       TEXT
+               ad_id      TEXT PRIMARY KEY,
+               url        TEXT,
+               price      INTEGER,
+               year       INTEGER,
+               mileage    INTEGER,
+               color      TEXT,
+               location   TEXT,
+               first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+               last_seen  TIMESTAMP,
+               hash       TEXT
         );"""
     )
     return conn
 
-# -------------------------------------------------------------------------------------
 async def fetch_listings(browser: Browser) -> List[Listing]:
     listings: List[Listing] = []
     page_num = 1
     while True:
-        page_url = BASE_URL + f"&page={page_num}"
-        page: Page = await browser.new_page(user_agent=USER_AGENT)
-        await page.goto(page_url, timeout=60_000)
-        # Attempt to select listing cards; if none found, break loop
+        url = f"{BASE_URL}&page={page_num}"
+        page = await browser.new_page(user_agent=USER_AGENT)
+        await page.goto(url, timeout=60_000)
+
         try:
-            await page.wait_for_selector("article.sf-search-ad", timeout=10000)
-        except Exception:
+            await page.wait_for_selector("article.sf-search-ad", timeout=10_000)
+        except:
             await page.close()
-            break  # No results on this page, end pagination
+            break
 
-        elements = await page.locator("article.sf-search-ad").element_handles()
-        if not elements:
+        ads = await page.locator("article.sf-search-ad").element_handles()
+        if not ads:
             await page.close()
-            break  # No more listings, exit
+            break
 
-        cards_html = []
-        for el in elements:
-            card_html = await el.inner_html()
-            cards_html.append(card_html)
+        for ad in ads:
+            html = await ad.inner_html()
+            listing = Listing.from_card(html)
+            if listing:
+                listings.append(listing)
 
-        for card_html in cards_html:
-            lst = Listing.from_card(card_html)
-            if lst:
-                listings.append(lst)
-        logging.info(f"Fetched {len(cards_html)} listings from page {page_num}")
-
+        logging.info(f"Page {page_num}: {len(ads)} ads")
         await page.close()
         page_num += 1
         time.sleep(CRAWL_DELAY_SEC)
+
     return listings
 
-# -------------------------------------------------------------------------------------
 async def main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s: %(message)s")
+
     spec = load_buy_box(BUY_BOX_PATH)
     conn = init_db()
 
-    if async_playwright is None:
-        raise RuntimeError("playwright is required to run this script")
+    # Correct, modern usage – async context-manager
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=HEADLESS)
+        try:
+            logging.info("Fetching listings…")
+            fetched = await fetch_listings(browser)
+            logging.info("Total fetched: %d", len(fetched))
 
-    pw = await async_playwright().start()
-    browser = await pw.chromium.launch(headless=HEADLESS)
-    try:
-        logging.info("Fetching listings…")
-        listings = await fetch_listings(browser)
-        logging.info("Fetched %d listings", len(listings))
+            cur = conn.cursor()
+            new_changed: List[Listing] = []
+            for lst in fetched:
+                if not matches_buy_box(lst, spec):
+                    continue
+                row = cur.execute(
+                    "SELECT price, mileage FROM listings WHERE ad_id = ?",
+                    (lst.ad_id,),
+                ).fetchone()
+                if row is None or row[0] != lst.price or row[1] != lst.mileage:
+                    new_changed.append(lst)
+                    cur.execute(
+                        "REPLACE INTO listings "
+                        "(ad_id, url, price, year, mileage, color, location, last_seen) "
+                        "VALUES (:ad_id, :url, :price, :year, :mileage, :color, "
+                        ":location, CURRENT_TIMESTAMP)",
+                        asdict(lst),
+                    )
+            conn.commit()
+            logging.info("New/changed: %d", len(new_changed))
 
-        new_or_changed: List[Listing] = []
-        cur = conn.cursor()
-        for lst in listings:
-            if not matches_buy_box(lst, spec):
-                continue
-            row = cur.execute("SELECT price, mileage FROM listings WHERE ad_id=?", (lst.ad_id,)).fetchone()
-            if row is None or row[0] != lst.price or row[1] != lst.mileage:
-                new_or_changed.append(lst)
-                cur.execute(
-                    "REPLACE INTO listings (ad_id, url, price, year, mileage, color, location, last_seen) "
-                    "VALUES (:ad_id, :url, :price, :year, :mileage, :color, :location, CURRENT_TIMESTAMP)",
-                    asdict(lst),
+            if new_changed:
+                import json
+                out = Path("delta_listings.json")
+                out.write_text(
+                    json.dumps([asdict(l) for l in new_changed],
+                               indent=2, ensure_ascii=False),
+                    encoding="utf-8",
                 )
-        conn.commit()
-        logging.info("%d new/changed listings stored", len(new_or_changed))
+                logging.info("Δ written → %s", out)
+            else:
+                logging.info("No new listings in buy-box today.")
+        finally:
+            conn.close()          # browser auto-closes via context-manager
 
-        import json
-        if new_or_changed:
-            out = Path("delta_listings.json")
-            with out.open("w", encoding="utf-8") as fp:
-                json.dump([asdict(l) for l in new_or_changed], fp, ensure_ascii=False, indent=2)
-            logging.info("Δ written → %s", out.resolve())
-        else:
-            logging.info("No new listings within buy‑box today.")
-    finally:
-        await browser.close()
-        await pw.stop()
-        conn.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
