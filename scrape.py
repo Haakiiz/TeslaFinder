@@ -36,8 +36,8 @@ from math import radians, cos, sin, asin, sqrt
 from playwright.async_api import async_playwright, Browser, Page
 
 # ---------- CONFIG ------------------------------------------------------------------
-BASE_URL = "https://www.finn.no/mobility/search/car?location=20002&location=20061&location=20007&location=20018&location=20003&location=22034&location=20009&location=20008&model=1.8078.2000555"
-HEADLESS = False
+BASE_URL = "https://www.finn.no/mobility/search/car?body_type=2&body_type=3&body_type=4&body_type=11&fuel=4&location=0.20002&location=0.20061&location=0.22034&location=0.20007&location=0.20003&mileage_to=100000&price_to=350000&registration_class=1&sales_form=2&sales_form=1&year_from=2020"
+HEADLESS = True
 CRAWL_DELAY_SEC = 4
 DB_PATH = Path("listings.db")
 BUY_BOX_PATH = Path("buy_box.yaml")

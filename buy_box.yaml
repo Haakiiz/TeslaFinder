@@ -1,5 +1,5 @@
-model: "Model Y"
-make: "Tesla"
+model: ""
+make: ""
 price_max: 500000      # in NOK
 year_min: 2020
 mileage_max: 100000     # in km

@@ -62,8 +62,8 @@ def call_openai():
             prompt={
                 "id": "pmpt_6862f7221d1c819492c79e78af8c1f5005e0a8ed68772a34",
                 "variables": {
-                    "num_listings": len(listings),
-                    "top_deals": TOP_DEALS,
+                    "num_listings": str(len(listings)),
+                    "top_deals": str(TOP_DEALS),
                     "listings": formatted_listing_text,
                 },
             },
@@ -72,7 +72,7 @@ def call_openai():
         print(f"OpenAI API error: {e}")
         sys.exit(1)
 
-    return response.choices[0].message.content
+    return response.output_text
 
 
 def parse_selected_ids(text):
