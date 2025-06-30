@@ -31,9 +31,17 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List
 
-import yaml
+try:
+    import yaml
+except Exception:  # pragma: no cover - allow import without PyYAML during tests
+    yaml = None  # type: ignore
+
 from math import radians, cos, sin, asin, sqrt
-from playwright.async_api import async_playwright, Browser, Page
+try:
+    from playwright.async_api import async_playwright, Browser, Page
+except Exception:  # pragma: no cover - playwright may be missing in CI
+    async_playwright = None  # type: ignore
+    Browser = Page = None  # type: ignore
 
 # ---------- CONFIG ------------------------------------------------------------------
 BASE_URL = "https://www.finn.no/mobility/search/car?body_type=2&body_type=3&body_type=4&body_type=11&fuel=4&location=0.20002&location=0.20061&location=0.22034&location=0.20007&location=0.20003&mileage_to=100000&price_to=350000&registration_class=1&sales_form=2&sales_form=1&year_from=2020"
@@ -129,6 +137,8 @@ class Listing:
 # -------------------------------------------------------------------------------------
 
 def load_buy_box(path: Path) -> Dict[str, Any]:
+    if yaml is None:
+        raise RuntimeError("PyYAML is required to load the buy box spec")
     with path.open() as fp:
         return yaml.safe_load(fp)
 
@@ -218,40 +228,44 @@ async def main():
     spec = load_buy_box(BUY_BOX_PATH)
     conn = init_db()
 
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=HEADLESS)
-        try:
-            logging.info("Fetching listings…")
-            listings = await fetch_listings(browser)
-            logging.info("Fetched %d listings", len(listings))
+    if async_playwright is None:
+        raise RuntimeError("playwright is required to run this script")
 
-            new_or_changed: List[Listing] = []
-            cur = conn.cursor()
-            for lst in listings:
-                if not matches_buy_box(lst, spec):
-                    continue
-                row = cur.execute("SELECT price, mileage FROM listings WHERE ad_id=?", (lst.ad_id,)).fetchone()
-                if row is None or row[0] != lst.price or row[1] != lst.mileage:
-                    new_or_changed.append(lst)
-                    cur.execute(
-                        "REPLACE INTO listings (ad_id, url, price, year, mileage, color, location, last_seen) "
-                        "VALUES (:ad_id, :url, :price, :year, :mileage, :color, :location, CURRENT_TIMESTAMP)",
-                        asdict(lst),
-                    )
-            conn.commit()
-            logging.info("%d new/changed listings stored", len(new_or_changed))
+    pw = await async_playwright().start()
+    browser = await pw.chromium.launch(headless=HEADLESS)
+    try:
+        logging.info("Fetching listings…")
+        listings = await fetch_listings(browser)
+        logging.info("Fetched %d listings", len(listings))
 
-            import json
-            if new_or_changed:
-                out = Path("delta_listings.json")
-                with out.open("w", encoding="utf-8") as fp:
-                    json.dump([asdict(l) for l in new_or_changed], fp, ensure_ascii=False, indent=2)
-                logging.info("Δ written → %s", out.resolve())
-            else:
-                logging.info("No new listings within buy‑box today.")
-        finally:
-            await browser.close()
-            conn.close()
+        new_or_changed: List[Listing] = []
+        cur = conn.cursor()
+        for lst in listings:
+            if not matches_buy_box(lst, spec):
+                continue
+            row = cur.execute("SELECT price, mileage FROM listings WHERE ad_id=?", (lst.ad_id,)).fetchone()
+            if row is None or row[0] != lst.price or row[1] != lst.mileage:
+                new_or_changed.append(lst)
+                cur.execute(
+                    "REPLACE INTO listings (ad_id, url, price, year, mileage, color, location, last_seen) "
+                    "VALUES (:ad_id, :url, :price, :year, :mileage, :color, :location, CURRENT_TIMESTAMP)",
+                    asdict(lst),
+                )
+        conn.commit()
+        logging.info("%d new/changed listings stored", len(new_or_changed))
+
+        import json
+        if new_or_changed:
+            out = Path("delta_listings.json")
+            with out.open("w", encoding="utf-8") as fp:
+                json.dump([asdict(l) for l in new_or_changed], fp, ensure_ascii=False, indent=2)
+            logging.info("Δ written → %s", out.resolve())
+        else:
+            logging.info("No new listings within buy‑box today.")
+    finally:
+        await browser.close()
+        await pw.stop()
+        conn.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
