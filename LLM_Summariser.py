@@ -6,7 +6,6 @@ import json
 import os
 import sys
 import argparse
-import anthropic
 import re
 import requests
 from bs4 import BeautifulSoup
@@ -37,39 +36,10 @@ def load_delta(path):
         sys.exit(1)
 
 
-
-response = client.responses.create(
-    model="gpt-4.1",
-    prompt={
-        "id": "pmpt_your_id",
-        "variables": {
-            "num_listings": len(listings),
-            "top_deals": TOP_DEALS,
-            "listings": formatted_listing_text,
-        },
-    },
-)
-
-def build_prompt(listings):
-    """
-    Construct a clear prompt for the LLM to shortlist the best deals.
-    Each listing is a dict with keys: ad_id, url, price, year, mileage, location, title.
-    """
-    if not listings:
-        return "No new or changed listings."  # Edge case
-
-    # Intro
-    prompt = []
-    prompt.append("You are an expert in evaluating used Tesla Model Y listings in Norway.")
-    prompt.append(
-        f"There are {len(listings)} new or updated listings. "
-        f"Shortlist the top {TOP_DEALS} best deals, considering price (lower is better),"
-        "model year (newer is better), and mileage (lower is better). Provide concise justifications."
-    )
-    prompt.append("Below are the listings (ad_id | title | year | mileage | price | location | url):")
-
-    # List each entry with progress
-    for entry in tqdm(listings, desc="Fetching listings"):
+def format_listings(listings):
+    """Return listing data as formatted lines for the prompt."""
+    lines = []
+    for entry in tqdm(listings, desc="Formatting listings"):
         ad_id = entry.get("ad_id", "")
         title = entry.get("title", "")
         year = entry.get("year", 0)
@@ -77,46 +47,32 @@ def build_prompt(listings):
         price = entry.get("price", 0)
         location = entry.get("location", "")
         url = entry.get("url", "")
-        prompt.append(f"- {ad_id} | {title} | {year} | {mileage} km | {price} kr | {location} | {url}")
-
-    prompt.append("Return your response in Markdown, with bullet points for each selected deal, listing ad_id and URL.")
-
-    return "\n".join(prompt)
-
-
-def call_anthropic(prompt_text):
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("Error: ANTHROPIC_API_KEY environment variable not set.")
-        sys.exit(1)
-
-    try:
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            messages=[
-                {"role": "user", "content": prompt_text}
-            ],
-            max_tokens=6000,
+        lines.append(
+            f"- {ad_id} | {title} | {year} | {mileage} km | {price} kr | {location} | {url}"
         )
-    except Exception as e:
-        print(f"Anthropic API error: {e}")
-        sys.exit(1)
+    return "\n".join(lines)
 
-    return response.content[0].text
+
 
 def call_openai():
-    response = client.responses.create(
-        model="gpt-4.1",
-        prompt={
-            "id": "pmpt_6862f7221d1c819492c79e78af8c1f5005e0a8ed68772a34",
-            "variables": {
-                "num_listings": len(listings),
-                "top_deals": TOP_DEALS,
-                "listings": formatted_listing_text,
+    """Call OpenAI using a reusable prompt."""
+    try:
+        response = client.responses.create(
+            model="gpt-4.1",
+            prompt={
+                "id": "pmpt_6862f7221d1c819492c79e78af8c1f5005e0a8ed68772a34",
+                "variables": {
+                    "num_listings": len(listings),
+                    "top_deals": TOP_DEALS,
+                    "listings": formatted_listing_text,
+                },
             },
-        },
-    )
+        )
+    except Exception as e:
+        print(f"OpenAI API error: {e}")
+        sys.exit(1)
+
+    return response.choices[0].message.content
 
 
 def parse_selected_ids(text):
@@ -178,12 +134,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     listings = load_delta(DELTA_PATH)
-    prompt_text = build_prompt(listings)
 
-    if prompt_text == "No new or changed listings.":
+    if not listings:
         summary = "No new or changed listings today."
     else:
-        first_response = call_anthropic(prompt_text)
+        formatted_listing_text = format_listings(listings)
+        first_response = call_openai()
         ids, urls = parse_selected_ids(first_response)
         selected = []
         for entry in listings:
@@ -195,8 +151,9 @@ if __name__ == "__main__":
         for entry in selected:
             entry.update(fetch_listing_details(entry.get("url")))
 
-        detail_prompt = build_ranking_prompt(selected)
-        summary = call_anthropic(detail_prompt)
+        listings = selected
+        formatted_listing_text = build_ranking_prompt(selected)
+        summary = call_openai()
 
     print(summary)
     try:
