@@ -13,12 +13,15 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from tqdm import tqdm
 load_dotenv()
+import datetime
+from openai import OpenAI
+client = OpenAI()
 
 # ---------- CONFIGURATION ------------------------------------------------------------
 # The JSON produced by scrape.py:
 DELTA_PATH = "delta_listings.json"
 # If desired, redirect summary to a file:
-OUTPUT_PATH = "summary.txt"
+OUTPUT_PATH = f"summary - {datetime.date.today().isoformat()}.txt"
 TOP_DEALS = 5
 
 # ---------- HELPER FUNCTIONS ---------------------------------------------------------
@@ -33,6 +36,19 @@ def load_delta(path):
         print(f"Error parsing JSON: {e}")
         sys.exit(1)
 
+
+
+response = client.responses.create(
+    model="gpt-4.1",
+    prompt={
+        "id": "pmpt_your_id",
+        "variables": {
+            "num_listings": len(listings),
+            "top_deals": TOP_DEALS,
+            "listings": formatted_listing_text,
+        },
+    },
+)
 
 def build_prompt(listings):
     """
@@ -88,6 +104,19 @@ def call_anthropic(prompt_text):
         sys.exit(1)
 
     return response.content[0].text
+
+def call_openai():
+    response = client.responses.create(
+        model="gpt-4.1",
+        prompt={
+            "id": "pmpt_6862f7221d1c819492c79e78af8c1f5005e0a8ed68772a34",
+            "variables": {
+                "num_listings": len(listings),
+                "top_deals": TOP_DEALS,
+                "listings": formatted_listing_text,
+            },
+        },
+    )
 
 
 def parse_selected_ids(text):

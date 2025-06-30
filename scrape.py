@@ -143,9 +143,9 @@ def matches_buy_box(lst: Listing, spec: Dict[str, Any]) -> bool:
     if lst.mileage > spec["mileage_max"]:
         print(f"Filtered by mileage: {lst.mileage}")
         return False
-    if lst.color and lst.color not in [c.lower() for c in spec["color"]]:
-        print(f"Filtered by color: {lst.color}")
-        return False
+    #if lst.color and lst.color not in [c.lower() for c in spec["color"]]: JEG TAR MED ALL FARGE
+        #print(f"Filtered by color: {lst.color}")
+        #return False
     for bad in spec.get("exclude_keywords", []):
         if bad.lower() in lst.title.lower() or bad.lower() in lst.url.lower():
             print(f"Filtered by keyword: {bad}")

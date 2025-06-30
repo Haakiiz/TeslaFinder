@@ -101,8 +101,7 @@ Tesla Model Y Hunter is a Python-based scraper and intelligence pipeline for Fin
 
 **Maintainers**
 
-* Håkon Granheim (Primary developer)
-* Dr. Peter Norvig (Conceptual design & oversight)
+* Haakiiz (Primary developer)
 
 **License**
 MIT (or your preferred license).
