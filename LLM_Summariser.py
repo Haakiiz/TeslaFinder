@@ -107,8 +107,8 @@ def fetch_listing_details(url):
 def build_ranking_prompt(listings):
     """Create prompt with detailed listings requesting ranked output."""
     prompt = [
-        "You are an expert in evaluating used Tesla Model Y listings in Norway.",
-        "Below are the shortlisted listings with additional details from their ad pages.",
+        """Evaluate listings for electric cars in Norway suitable for a couple with a 16-month-old baby. Identify cars with good space for a stroller.
+        Prioritize the following factors: price (lower is better), model year (newer is better), and mileage (lower is better). Provide concise justifications for your selections."""
     ]
     for entry in listings:
         desc = entry.get("description", "")
