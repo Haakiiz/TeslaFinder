@@ -104,28 +104,23 @@ def fetch_listing_details(url):
     return {"description": description, "title": title_text}
 
 
-def build_ranking_prompt(listings):
-    """Create prompt with detailed listings requesting ranked output."""
-    prompt = [
-        "You are an expert in evaluating used Tesla Model Y listings in Norway.",
-        "Below are the shortlisted listings with additional details from their ad pages.",
-    ]
-    for entry in listings:
-        desc = entry.get("description", "")
-        desc = desc.replace("\n", " ")
-        prompt.append(
-            f"- {entry.get('ad_id')} | {entry.get('title')} | {entry.get('year')} | "
-            f"{entry.get('mileage')} km | {entry.get('price')} kr | {entry.get('location')} | "
-            f"{entry.get('url')} | {desc[:200]}"
+def build_ranking_prompt(wolla):
+    try:
+        response = client.responses.create(
+            prompt={
+                "id": "pmpt_6868188856f48196ab8d90490278bb2002ba91727cfe46dd",
+                "version": "9",
+                "variables": {
+                    "top_deals": str(TOP_DEALS),
+                    "listings": str(wolla)
+                },
+            },
         )
+    except Exception as e:
+        print(f"OpenAI API error: {e}")
+        sys.exit(1)
 
-    prompt.append(
-        "Rank these deals from 1 (best) to 5 (worst) with a short reasoning for each. "
-        "Return a Markdown numbered list."
-        "Provide the URL for the user to click on"
-    )
-    return "\n".join(prompt)
-
+    return response.output_text
 
 # ---------- MAIN --------------------------------------------------------------------
 if __name__ == "__main__":
