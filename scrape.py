@@ -101,15 +101,15 @@ def matches_buy_box(lst: Listing, spec: Dict[str, Any]) -> bool:
         return False
     if lst.mileage > spec["mileage_max"]:
         return False
-    if lst.color:
-        allowed = [c.lower() for c in spec.get("color", [])]
-        if "black" in allowed:
-            allowed.extend(["svart", "sort"])
-        if allowed and lst.color.lower() not in allowed:
-            return False
-    for bad in spec.get("exclude_keywords", []):
-        if bad.lower() in (lst.title or "").lower() or bad.lower() in lst.url.lower():
-            return False
+    #if lst.color:
+        #allowed = [c.lower() for c in spec.get("color", [])]
+        #if "black" in allowed:
+            #allowed.extend(["svart", "sort"])
+        #if allowed and lst.color.lower() not in allowed:
+            #return False
+    #for bad in spec.get("exclude_keywords", []):
+        #if bad.lower() in (lst.title or "").lower() or bad.lower() in lst.url.lower():
+            #return False
     return True
 
 def init_db():

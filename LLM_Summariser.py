@@ -21,7 +21,7 @@ client = OpenAI()
 DELTA_PATH = "delta_listings.json"
 # If desired, redirect summary to a file:
 OUTPUT_PATH = f"summary - {datetime.date.today().isoformat()}.txt"
-TOP_DEALS = 5
+TOP_DEALS = 20
 
 # ---------- HELPER FUNCTIONS ---------------------------------------------------------
 def load_delta(path):
@@ -52,29 +52,6 @@ def format_listings(listings):
         )
     return "\n".join(lines)
 
-
-
-def call_openai():
-    """Call OpenAI using a reusable prompt."""
-    try:
-        response = client.responses.create(
-            model="gpt-4.1",
-            prompt={
-                "id": "pmpt_6862f7221d1c819492c79e78af8c1f5005e0a8ed68772a34",
-                "variables": {
-                    "num_listings": str(len(listings)),
-                    "top_deals": str(TOP_DEALS),
-                    "listings": formatted_listing_text,
-                },
-            },
-        )
-    except Exception as e:
-        print(f"OpenAI API error: {e}")
-        sys.exit(1)
-
-    return response.output_text
-
-
 def parse_selected_ids(text):
     """Extract ad IDs and URLs from the first LLM response."""
     ids = set(re.findall(r"\b\d{6,}\b", text))
@@ -104,27 +81,39 @@ def fetch_listing_details(url):
     return {"description": description, "title": title_text}
 
 
-def build_ranking_prompt(listings):
-    """Create prompt with detailed listings requesting ranked output."""
-    prompt = [
-        """Evaluate listings for electric cars in Norway suitable for a couple with a 16-month-old baby. Identify cars with good space for a stroller.
-        Prioritize the following factors: price (lower is better), model year (newer is better), and mileage (lower is better). Provide concise justifications for your selections."""
-    ]
+def prompt_variables_from(listings: list[dict], deep: bool = False) -> dict[str, str]:
+    """Return the substitution map for either prompt."""
+    lines = []
     for entry in listings:
-        desc = entry.get("description", "")
-        desc = desc.replace("\n", " ")
-        prompt.append(
-            f"- {entry.get('ad_id')} | {entry.get('title')} | {entry.get('year')} | "
-            f"{entry.get('mileage')} km | {entry.get('price')} kr | {entry.get('location')} | "
-            f"{entry.get('url')} | {desc[:200]}"
+        base = (
+            f"{entry['ad_id']} | {entry['title']} | {entry['year']} | "
+            f"{entry['mileage']} km | {entry['price']} kr | "
+            f"{entry['location']} | {entry['url']}"
         )
+        if deep:
+            desc = entry.get("description", "").replace("\n", " ").strip()
+            base += f" | {desc[:500]}"  # limit long blurbs
+        lines.append(f"- {base}")
+    return {
+        "num_listings": str(len(listings)),
+        "top_deals": str(TOP_DEALS),
+        "listings": "\n".join(lines),
+    }
 
-    prompt.append(
-        "Rank these deals from 1 (best) to 5 (worst) with a short reasoning for each. "
-        "Return a Markdown numbered list."
-        "Provide the URL for the user to click on"
-    )
-    return "\n".join(prompt)
+
+def call_openai(variables: dict[str, str], prompt_id: str) -> str:
+    """Call OpenAI with the given reusable prompt ID and vars."""
+    try:
+        response = client.responses.create(
+            prompt={
+                "id": prompt_id,
+                "variables": variables,
+            },
+        )
+        return response.output_text
+    except Exception as e:
+        sys.exit(f"OpenAI API error: {e}")
+
 
 
 # ---------- MAIN --------------------------------------------------------------------
@@ -135,25 +124,21 @@ if __name__ == "__main__":
 
     listings = load_delta(DELTA_PATH)
 
-    if not listings:
-        summary = "No new or changed listings today."
-    else:
-        formatted_listing_text = format_listings(listings)
-        first_response = call_openai()
+    if listings:
+        vars_first_pass = prompt_variables_from(listings, deep=False)
+        first_response = call_openai(vars_first_pass,
+                                     prompt_id="pmpt_6862f7221d1c819492c79e78af8c1f5005e0a8ed68772a34")  # rough scan prompt
+
         ids, urls = parse_selected_ids(first_response)
-        selected = []
-        for entry in listings:
-            if str(entry.get("ad_id")) in ids or entry.get("url") in urls:
-                selected.append(entry)
-            if len(selected) >= TOP_DEALS:
-                break
+        selected = [e for e in listings if str(e["ad_id"]) in ids or e["url"] in urls][:TOP_DEALS]
 
         for entry in selected:
-            entry.update(fetch_listing_details(entry.get("url")))
+            entry.update(fetch_listing_details(entry["url"]))
 
-        listings = selected
-        formatted_listing_text = build_ranking_prompt(selected)
-        summary = call_openai()
+        vars_final_pass = prompt_variables_from(selected, deep=True)
+        summary = call_openai(vars_final_pass, prompt_id="pmpt_6868188856f48196ab8d90490278bb2002ba91727cfe46dd")  # deep eval prompt
+    else:
+        summary = "No new or changed listings today."
 
     print(summary)
     try:
