@@ -16,6 +16,82 @@ import datetime
 from openai import OpenAI
 client = OpenAI()
 
+# ---------- PROMPT TEMPLATES ---------------------------------------------------------
+INITIAL_PROMPT_TEMPLATE = """Evaluate listings for electric cars in Norway suitable for a couple with a 16-month-old baby. Identify cars with good space for a stroller. Prioritize the following factors: price (lower is better), model year (newer is better), and mileage (lower is better). Provide concise justifications for your selections.
+
+There are {num_listings} new or updated listings. Shortlist the top {top_deals} best deals. Below are the listings (ad_id | title | year | mileage | price | location | url):
+{listings}
+
+## Output Format
+Return the response in Markdown format:
+
+- Use bullet points for each selected deal.
+- For each bullet, include:
+  - ad_id
+  - URL
+  - A brief justification or key factors that influenced the selection (such as model year, price, space, etc.).
+- Example:
+
+  - ad_id: 12345 | [URL](https://example.com/12345) – Reason: Newest model, lowest mileage, best price.
+  - ad_id: 98765 | [URL](https://example.com/98765) – Reason: Spacious, recent year, affordable.
+
+If there are fewer than {top_deals} qualifying listings, return as many as are available. If multiple listings are equally ranked, select based on the best combination of price, model year, and mileage. If a listing has missing or inconsistent data, briefly note it in the justification.
+Important: you must always have a Tesla Model Y in your result.  (Model Y, not Model 3.)"""
+
+RANKING_PROMPT_TEMPLATE = """# Role and Objective
+- Evaluate and rank provided electric car listings from FINN.no for a couple in Norway with a 16-month-old baby, focusing on family suitability using full description analysis.
+
+# Preliminary Checklist
+Begin with a concise checklist (3-7 bullets) of what you will do; keep items conceptual, not implementation-level.
+
+# Instructions
+- Assess the provided {top_deals} electric car listings, already pre-filtered by basic metrics (price, mileage, year), using detailed description text to finalize the ranking for a family use case.
+- Prioritize listings offering spacious interiors, ample trunk capacity (particularly for carrying a stroller), and other family-friendly or child-related features.
+- Be alert to notes regarding price realism (e.g., low price warnings), and mention any significant pros or cons from the description.
+
+## Guidelines for Review and Ranking
+- Examine signals including, but not limited to:
+  - Interior or trunk space
+  - Specific mentions of family-friendliness or ability to fit strollers/luggage
+  - Warnings or red flags in price-value proposition
+  - Other important pros/cons
+- Only consider information explicitly present in the descriptions; if key information is missing or partial, state so directly.
+- Only feature one Tesla Model Y in the rankings. If several are present, choose the one with the most family-relevant description; if tied, select by better price or lower mileage.
+- Do not introduce new or external listings; only rank those provided.
+
+# Input Context
+- Listings are provided as: `ad_id | title | year | mileage | price | location | url | description`
+- {top_deals} indicates the number of listings; below are the listings:
+{listings}
+
+# Output Format
+Return the ranking in Markdown as follows:
+
+1. [ad_id](url) – Brief justification (1–3 sentences, grounded in description and family relevance)
+2. [ad_id](url) – Brief justification (1–3 sentences)
+...
+
+This service was brought to you by [your AI Model Name].
+
+- Use ranking ties if warranted, adjusting numbering accordingly.
+- For incomplete, vague, or missing descriptions, the justification must state this clearly.
+- Highlight which family-related features are mentioned or omitted.
+- Only a single Tesla Model Y allowed in the list (if present).
+
+# Reasoning Steps
+- Analyze each description for space, child/travel suitability, and price cues.
+- Identify and resolve ties by evaluating described features, price, and mileage.
+- Conclude with the required signature statement.
+
+# Verbosity
+- Keep justifications concise and targeted (1–3 clear sentences).
+
+# Agentic Balance
+Attempt a first pass autonomously unless missing critical info; stop and ask for clarification if key success criteria or constraints cannot be met due to missing information.
+
+# Stop Conditions
+- Ranking list complete with appropriate tie handling, all requested constraints satisfied, closing statement included."""
+
 # ---------- CONFIGURATION ------------------------------------------------------------
 # The JSON produced by scrape.py:
 DELTA_PATH = "delta_listings.json"
@@ -37,7 +113,7 @@ def load_delta(path):
 
 
 def format_listings(listings):
-    """Return listing data as formatted lines for the prompt."""
+    """Return listing data as formatted lines without units for the first prompt."""
     lines = []
     for entry in tqdm(listings, desc="Formatting listings"):
         ad_id = entry.get("ad_id", "")
@@ -48,14 +124,82 @@ def format_listings(listings):
         location = entry.get("location", "")
         url = entry.get("url", "")
         lines.append(
-            f"- {ad_id} | {title} | {year} | {mileage} km | {price} kr | {location} | {url}"
+            f"{ad_id} | {title} | {year} | {mileage} | {price} | {location} | {url}"
         )
     return "\n".join(lines)
 
+
+def format_listings_with_description(listings):
+    """Return listing data including description for the ranking prompt."""
+    lines = []
+    for entry in listings:
+        ad_id = entry.get("ad_id", "")
+        title = entry.get("title", "")
+        year = entry.get("year", 0)
+        mileage = entry.get("mileage", 0)
+        price = entry.get("price", 0)
+        location = entry.get("location", "")
+        url = entry.get("url", "")
+        description = entry.get("description", "").replace("\n", " ")
+        lines.append(
+            f"{ad_id} | {title} | {year} | {mileage} | {price} | {location} | {url} | {description}"
+        )
+    return "\n".join(lines)
+
+
+
+def call_initial_prompt(listings_text, num_listings):
+    """Call OpenAI with the initial prompt to shortlist listings."""
+    prompt = INITIAL_PROMPT_TEMPLATE.format(
+        num_listings=num_listings,
+        top_deals=TOP_DEALS,
+        listings=listings_text,
+    )
+    try:
+        response = client.responses.create(
+            model="gpt-4.1",
+            input=prompt,
+        )
+    except Exception as e:
+        print(f"OpenAI API error: {e}")
+        sys.exit(1)
+
+    return response.output_text
+
+
+def call_ranking_prompt(listings_text):
+    """Call OpenAI with the ranking prompt using listing descriptions."""
+    prompt = RANKING_PROMPT_TEMPLATE.format(
+        top_deals=TOP_DEALS,
+        listings=listings_text,
+    )
+    try:
+        response = client.responses.create(
+            model="gpt-4.1",
+            input=prompt,
+        )
+    except Exception as e:
+        print(f"OpenAI API error: {e}")
+        sys.exit(1)
+
+    return response.output_text
+
+
 def parse_selected_ids(text):
-    """Extract ad IDs and URLs from the first LLM response."""
-    ids = set(re.findall(r"\b\d{6,}\b", text))
-    urls = set(re.findall(r"https?://\S+", text))
+    """Extract ad IDs and URLs from an LLM response in a tolerant way.
+
+    - Captures explicit URLs
+    - Captures 6+ digit ID tokens
+    - Also attempts to extract IDs from found FINN URLs
+    """
+    ids = set(re.findall(r"\b\d{9}\b", text))
+    urls = set(re.findall(r"https?://www\.finn\.no/mobility/item/\d{9}\b", text))
+
+    # Extract IDs from FINN-like URLs (…/item/123456789)
+    for u in list(urls):
+        m = re.search(r"/item/(\d{9})\b", u)
+        if m:
+            ids.add(m.group(1))
     return ids, urls
 
 
@@ -81,64 +225,43 @@ def fetch_listing_details(url):
     return {"description": description, "title": title_text}
 
 
-def prompt_variables_from(listings: list[dict], deep: bool = False) -> dict[str, str]:
-    """Return the substitution map for either prompt."""
-    lines = []
-    for entry in listings:
-        base = (
-            f"{entry['ad_id']} | {entry['title']} | {entry['year']} | "
-            f"{entry['mileage']} km | {entry['price']} kr | "
-            f"{entry['location']} | {entry['url']}"
-        )
-        if deep:
-            desc = entry.get("description", "").replace("\n", " ").strip()
-            base += f" | {desc[:500]}"  # limit long blurbs
-        lines.append(f"- {base}")
-    return {
-        "num_listings": str(len(listings)),
-        "top_deals": str(TOP_DEALS),
-        "listings": "\n".join(lines),
-    }
-
-
-def call_openai(variables: dict[str, str], prompt_id: str) -> str:
-    """Call OpenAI with the given reusable prompt ID and vars."""
-    try:
-        response = client.responses.create(
-            prompt={
-                "id": prompt_id,
-                "variables": variables,
-            },
-        )
-        return response.output_text
-    except Exception as e:
-        sys.exit(f"OpenAI API error: {e}")
-
-
-
 # ---------- MAIN --------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Summarise Tesla listings")
     parser.add_argument("--verbose", action="store_true", help="Show progress messages")
+    parser.add_argument(
+        "--use-llm-shortlist",
+        action="store_true",
+        help="Use the first-pass LLM to shortlist listings (default: heuristic only)",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Write summary to this path in addition to a dated file",
+    )
     args = parser.parse_args()
 
     listings = load_delta(DELTA_PATH)
 
-    if listings:
-        vars_first_pass = prompt_variables_from(listings, deep=False)
-        first_response = call_openai(vars_first_pass,
-                                     prompt_id="pmpt_6862f7221d1c819492c79e78af8c1f5005e0a8ed68772a34")  # rough scan prompt
-
+    if not listings:
+        summary = "No new or changed listings today."
+    else:
+        formatted_listing_text = format_listings(listings)
+        first_response = call_initial_prompt(formatted_listing_text, len(listings))
         ids, urls = parse_selected_ids(first_response)
-        selected = [e for e in listings if str(e["ad_id"]) in ids or e["url"] in urls][:TOP_DEALS]
+        selected = []
+        for entry in listings:
+            if str(entry.get("ad_id")) in ids or entry.get("url") in urls:
+                selected.append(entry)
+            if len(selected) >= TOP_DEALS:
+                break
 
         for entry in selected:
-            entry.update(fetch_listing_details(entry["url"]))
+            entry.update(fetch_listing_details(entry.get("url")))
 
-        vars_final_pass = prompt_variables_from(selected, deep=True)
-        summary = call_openai(vars_final_pass, prompt_id="pmpt_6868188856f48196ab8d90490278bb2002ba91727cfe46dd")  # deep eval prompt
-    else:
-        summary = "No new or changed listings today."
+        listings_with_desc = format_listings_with_description(selected)
+        summary = call_ranking_prompt(listings_with_desc)
 
     print(summary)
     try:

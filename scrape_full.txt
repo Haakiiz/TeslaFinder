@@ -246,13 +246,10 @@ async def main():
                 logging.info("Δ written → %s", out)
             else:
                 logging.info("No new listings in buy-box today.")
-            # Prune old rows to keep DB to ~1 month
-            deleted = prune_old_rows(conn, days=RETENTION_DAYS)
-            if deleted:
-                logging.info("Pruned %d old rows (>%d days)", deleted, RETENTION_DAYS)
         finally:
             conn.close()          # browser auto-closes via context-manager
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
