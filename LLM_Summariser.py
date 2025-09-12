@@ -67,16 +67,15 @@ Begin with a concise checklist (3-7 bullets) of what you will do; keep items con
 # Output Format
 Return the ranking in Markdown as follows:
 
-1. [ad_id](url) – Brief justification (1–3 sentences, grounded in description and family relevance)
-2. [ad_id](url) – Brief justification (1–3 sentences)
+1. [ad_id](url) [Car name, Price and Km] – Brief justification (1–3 sentences, grounded in description and family relevance)
+2. [ad_id](url) [Car name, Price and Km] – Brief justification (1–3 sentences)
 ...
 
-This service was brought to you by [your AI Model Name].
 
 - Use ranking ties if warranted, adjusting numbering accordingly.
 - For incomplete, vague, or missing descriptions, the justification must state this clearly.
 - Highlight which family-related features are mentioned or omitted.
-- Only a single Tesla Model Y allowed in the list (if present).
+- Must add a Tesla model Y in the list (if present)
 
 # Reasoning Steps
 - Analyze each description for space, child/travel suitability, and price cues.
@@ -97,7 +96,7 @@ Attempt a first pass autonomously unless missing critical info; stop and ask for
 DELTA_PATH = "delta_listings.json"
 # If desired, redirect summary to a file:
 OUTPUT_PATH = f"summary - {datetime.date.today().isoformat()}.txt"
-TOP_DEALS = 20
+TOP_DEALS = 10
 
 # ---------- HELPER FUNCTIONS ---------------------------------------------------------
 def load_delta(path):
@@ -157,7 +156,7 @@ def call_initial_prompt(listings_text, num_listings):
     )
     try:
         response = client.responses.create(
-            model="gpt-4.1",
+            model="gpt-5-mini",
             input=prompt,
         )
     except Exception as e:
@@ -175,7 +174,7 @@ def call_ranking_prompt(listings_text):
     )
     try:
         response = client.responses.create(
-            model="gpt-4.1",
+            model="gpt-5",
             input=prompt,
         )
     except Exception as e:

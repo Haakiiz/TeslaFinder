@@ -27,6 +27,7 @@ BASE_URL = (
     "&mileage_to=100000&price_to=350000&registration_class=1"
     "&sales_form=2&sales_form=1&year_from=2020"
 )
+
 HEADLESS = True
 CRAWL_DELAY_SEC = 4
 DB_PATH = Path("listings.db")
