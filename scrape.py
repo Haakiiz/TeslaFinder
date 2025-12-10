@@ -188,9 +188,6 @@ async def fetch_listings(browser: Browser) -> List[Listing]:
             html = await ad.inner_html()
             listing = Listing.from_card(html)
             if listing:
-                # Keep only Tesla Model Y listings
-                if "model y" not in (listing.title or "").lower():
-                    continue
                 listings.append(listing)
 
         logging.info(f"Page {page_num}: {len(ads)} ads")
@@ -211,7 +208,7 @@ async def main():
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=HEADLESS)
         try:
-            logging.info("Fetching listings…")
+            logging.info("Fetching listings...")
             fetched = await fetch_listings(browser)
             logging.info("Total fetched: %d", len(fetched))
 
@@ -244,7 +241,7 @@ async def main():
                                indent=2, ensure_ascii=False),
                     encoding="utf-8",
                 )
-                logging.info("Δ written → %s", out)
+                logging.info("Delta written to %s", out)
             else:
                 logging.info("No new listings in buy-box today.")
             # Prune old rows to keep DB to ~1 month

@@ -1,0 +1,40 @@
+Preliminary checklist
+- Parse each description for explicit family signals (spaciousness, trunk, stroller mentions, seat count).
+- Note any child-friendly features (tinted windows, panoramic roof, warranty/peace-of-mind).
+- Flag red flags (lease takeover vs purchase, range limits, vague descriptions).
+- Prefer listings that clearly state roominess and usability for luggage/strollers.
+- If key family info is missing, call that out and rank lower.
+
+1. [440212672](https://www.finn.no/mobility/item/440212672) Volkswagen ID.7, 11,425 NOK and 39,970 km - Described explicitly as a “romslig … helelektrisk familiebil” and offered for immediate takeover, strongly signaling family suitability. Note: this is a lease takeover; the listed “price” appears to be a monthly cost, not directly comparable to purchase prices. No specific trunk/stroller details provided.
+
+2. [438038490](https://www.finn.no/mobility/item/438038490) Citroen Berlingo, 79,434 NOK and 26,500 km - Called a “praktisk 5 seter varebil” with “veldig god plass,” which is directly relevant for strollers and luggage. The ad emphasizes it’s “perfekt for … korte distanser,” indicating limited range as a trade-off for family space.
+
+3. [437762856](https://www.finn.no/mobility/item/437762856) MG ZS EV, 119,434 NOK and 99,021 km - Family context is explicit (seller is a family of 6; car has 5 seats), plus panoramic roof and tinted windows (useful for child comfort). Full service history noted; no explicit interior/trunk capacity details.
+
+4. [436181444](https://www.finn.no/mobility/item/436181444) MG ZS EV, 112,434 NOK and 75,000 km - Highlights 7-year/150,000 km new car warranty and service history—good reassurance for family use. No direct mentions of space or stroller capacity in the description.
+
+5. [440613224](https://www.finn.no/mobility/item/440613224) MG ZS EV, 115,434 NOK and 87,476 km - Seller notes it’s a “helt topp bil” with summer range better than stated and that there are “noen måneder igjen” (implying remaining warranty/time), but no family/space specifics. Useful general notes; lacks explicit stroller/trunk info.
+
+6. [440539284](https://www.finn.no/mobility/item/440539284) Skoda Citigo, 119,000 NOK and 77,800 km - The ad stresses “liten, lettvin” and “snerten,” though “overraskende romslig” for its size. No mention of trunk capacity or stroller fit; likely a tighter option for a family with a baby.
+
+7. [434876224](https://www.finn.no/mobility/item/434876224) Skoda Citigo, 109,900 NOK and 95,036 km - Generic dealer ad with no space/family details; nothing about trunk or stroller fit. Without explicit info, hard to endorse for family needs.
+
+8. [440217311](https://www.finn.no/mobility/item/440217311) Skoda Citigo, 119,000 NOK and 86,500 km - Dealer assurance on warranty/delivery but no interior or cargo details. Family suitability not addressed in the description.
+
+9. [440166989](https://www.finn.no/mobility/item/440166989) Volkswagen UP!, 119,999 NOK and 75,000 km - Emphasizes “svært praktisk og økonomisk” with stated 250 km range, but no mention of space or stroller capacity. Lacks family-focused details.
+
+10. [366444660](https://www.finn.no/mobility/item/366444660) Renault Twizy, 89,613 NOK and 537 km - Description focuses on low running costs (no tolls, no EU control) and omits interior/trunk/family information. Without any space or seating detail, it does not present as a family-suitable option.
+
+No Tesla Model Y present among the provided listings; none added.
+
+Baggage space (web search):
+- Volkswagen ID.7 (2024) (ad 440212672): ~532 L (source: https://www.autoexpress.co.uk/volkswagen/id7/362995/volkswagen-id7-boot-space-comfort-practicality)
+- Citroen Berlingo (2020) (ad 438038490): ~775 L (source: https://www.citroen.co.uk/content/citroen/worldwide/uk/en/index/models/berlingo.html)
+- Renault Twizy (ad 366444660): ~31 L (source: https://www.renault.sc/cars/TWIZYm09ePh1/dimensions.html)
+- Skoda Citigo (ad 434876224): ~250 L (source: https://www.parkers.co.uk/skoda/citigo-e/review/practicality/)
+- MG ZS EV (2020) (ad 436181444): ~448 L (source: https://ev-database.org/uk/car/1201/MG-ZS-EV)
+- MG ZS EV 2020 (ad 440613224): ~448 L (source: https://ev-database.org/uk/car/1201/MG-ZS-EV)
+- Skoda Citigo (ad 440539284): ~250 L (source: https://www.skoda-storyboard.com/en/press-kits/skoda-iv-press-kit/skoda-citigoe-iv-the-zero-emission-city-sportster/)
+- Skoda Citigo (ad 440217311): ~250 L (source: https://www.drivingelectric.com/skoda/citigo/practicality)
+- MG ZS EV (ad 437762856): ~448 L (source: https://ev-database.org/uk/car/1201/MG-ZS-EV)
+- Volkswagen UP! 2020 (ad 440166989): ~251 L (source: https://www.volkswagen-newsroom.com/en/up-driving-presentation-3071/up-interior-3100)

@@ -1,0 +1,13 @@
+Preliminary checklist
+- Confirm which listings are provided and extract family-relevant details from each description
+- Identify explicit mentions of interior space, trunk capacity, and stroller/luggage fit
+- Look for child-friendly or family features (e.g., ISOFIX mentions, rear-seat practicality)
+- Note any price realism warnings or red flags cited in the ad
+- Rank by family suitability based strictly on the ad text, stating missing info where applicable and resolving ties by price/mileage
+
+Ranking
+1. [427825670](https://www.finn.no/mobility/item/427825670) [Tesla Model Y Performance, 337,343 NOK, 86,500 km] – Description focuses on Performance trim, black premium interior, performance brakes, and 21" Uberturbine wheels; it does not mention trunk size, rear-seat space, stroller fit, or other family features. No price-warning notes are included. Family-relevant info is largely missing, so ranking is tentative.
+
+Only one listing was provided. Please share the remaining nine listings to complete a full family-suitability ranking.
+
+Signature: Ranking based solely on the provided seller descriptions; no external assumptions added.

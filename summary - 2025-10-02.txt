@@ -1,0 +1,13 @@
+Preliminary checklist
+- Extract explicit family-relevant signals from each description (interior space, trunk/stroller fit, rear-seat practicality).
+- Note any direct mentions of family use, child equipment, or luggage capacity.
+- Flag warnings about pricing realism or other red flags stated in the ad.
+- Weigh pros/cons only from text provided; call out missing or vague info.
+- Rank by family suitability; include only one Tesla Model Y.
+
+Ranking
+1. [428896529](https://www.finn.no/mobility/item/428896529) [Tesla Model Y, 339,000 NOK and 81,000 km] – Description is truncated and mostly dealership opening hours; no explicit info on trunk capacity, stroller fit, rear-seat space, or family features. Family suitability cannot be verified from the provided text; included as the required Tesla entry but lacks stated family-relevant details.
+
+I only received 1 of the 10 listings. Please provide the remaining 9 full descriptions (ad_id | title | year | mileage | price | location | url | description) so I can complete and finalize the ranking.
+
+Analysis based solely on the provided descriptions; no external assumptions.

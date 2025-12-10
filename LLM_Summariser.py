@@ -8,10 +8,12 @@ import sys
 import argparse
 import re
 from pathlib import Path
+from typing import Optional
 
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field, ValidationError
 from tqdm import tqdm
 load_dotenv()
 import datetime
@@ -19,7 +21,7 @@ from openai import OpenAI
 client = OpenAI()
 
 # ---------- PROMPT TEMPLATES ---------------------------------------------------------
-INITIAL_PROMPT_TEMPLATE = """Evaluate listings for electric cars in Norway suitable for a couple with a 16-month-old baby. Identify cars with good space for a stroller. Prioritize the following factors: price (lower is better), model year (newer is better), and mileage (lower is better). Provide concise justifications for your selections.
+INITIAL_PROMPT_TEMPLATE = """Evaluate listings for electric cars in Norway suitable for a couple with a 16-month-old baby. Identify cars with good space for a stroller. Prioritize the following factors: price (lower is better), model year (newer is better), and mileage (lower is better). Provide concise justifications for your selections. Ensure the shortlist contains at least one Tesla Model Y if any are present, but do not limit the list to Model Y only.
 
 There are {num_listings} new or updated listings. Shortlist the top {top_deals} best deals. Below are the listings (ad_id | title | year | mileage | price | location | url):
 {listings}
@@ -34,11 +36,10 @@ Return the response in Markdown format:
   - A brief justification or key factors that influenced the selection (such as model year, price, space, etc.).
 - Example:
 
-  - ad_id: 12345 | [URL](https://example.com/12345) – Reason: Newest model, lowest mileage, best price.
-  - ad_id: 98765 | [URL](https://example.com/98765) – Reason: Spacious, recent year, affordable.
+  - ad_id: 12345 | [URL](https://example.com/12345) - Reason: Newest model, lowest mileage, best price.
+  - ad_id: 98765 | [URL](https://example.com/98765) - Reason: Spacious, recent year, affordable.
 
-If there are fewer than {top_deals} qualifying listings, return as many as are available. If multiple listings are equally ranked, select based on the best combination of price, model year, and mileage. If a listing has missing or inconsistent data, briefly note it in the justification.
-Important: you must always have a Tesla Model Y in your result.  (Model Y, not Model 3.)"""
+If there are fewer than {top_deals} qualifying listings, return as many as are available. If multiple listings are equally ranked, select based on the best combination of price, model year, and mileage. If a listing has missing or inconsistent data, briefly note it in the justification. Include at least one Tesla Model Y if any are present; otherwise, select the best overall deals."""
 
 RANKING_PROMPT_TEMPLATE = """# Role and Objective
 - Evaluate and rank provided electric car listings from FINN.no for a couple in Norway with a 16-month-old baby, focusing on family suitability using full description analysis.
@@ -58,7 +59,7 @@ Begin with a concise checklist (3-7 bullets) of what you will do; keep items con
   - Warnings or red flags in price-value proposition
   - Other important pros/cons
 - Only consider information explicitly present in the descriptions; if key information is missing or partial, state so directly.
-- Only feature one Tesla Model Y in the rankings. If several are present, choose the one with the most family-relevant description; if tied, select by better price or lower mileage.
+- Ensure the final top list includes at least one Tesla Model Y if any are present, while still allowing other makes/models to appear.
 - Do not introduce new or external listings; only rank those provided.
 
 # Input Context
@@ -69,15 +70,15 @@ Begin with a concise checklist (3-7 bullets) of what you will do; keep items con
 # Output Format
 Return the ranking in Markdown as follows:
 
-1. [ad_id](url) [Car name, Price and Km] – Brief justification (1–3 sentences, grounded in description and family relevance)
-2. [ad_id](url) [Car name, Price and Km] – Brief justification (1–3 sentences)
+1. [ad_id](url) [Car name, Price and Km] - Brief justification (1-3 sentences, grounded in description and family relevance)
+2. [ad_id](url) [Car name, Price and Km] - Brief justification (1-3 sentences)
 ...
 
 
 - Use ranking ties if warranted, adjusting numbering accordingly.
 - For incomplete, vague, or missing descriptions, the justification must state this clearly.
 - Highlight which family-related features are mentioned or omitted.
-- Must add a Tesla model Y in the list (if present)
+- Must add at least one Tesla Model Y in the list when present
 
 # Reasoning Steps
 - Analyze each description for space, child/travel suitability, and price cues.
@@ -85,13 +86,48 @@ Return the ranking in Markdown as follows:
 - Conclude with the required signature statement.
 
 # Verbosity
-- Keep justifications concise and targeted (1–3 clear sentences).
+- Keep justifications concise and targeted (1-3 clear sentences).
 
 # Agentic Balance
 Attempt a first pass autonomously unless missing critical info; stop and ask for clarification if key success criteria or constraints cannot be met due to missing information.
 
 # Stop Conditions
 - Ranking list complete with appropriate tie handling, all requested constraints satisfied, closing statement included."""
+
+BAGGAGE_SEARCH_SYSTEM_PROMPT = """You are a car-spec research assistant. Use the web_search tool to find trunk/luggage capacity for the provided car.
+- Prefer liters; if only cubic meters are available, convert to liters (1 m^3 = 1000 liters).
+- If multiple numbers are mentioned, prefer the main rear luggage/trunk volume with seats up.
+- Return the capacity as a number in liters when available and cite a single supporting source URL.
+- If you cannot find a reliable value after searching, set trunk_volume_liters to null and note: "searched but did not find trunk volume".
+Respond only with the structured JSON requested."""
+
+BAGGAGE_JSON_SCHEMA = {
+    "name": "baggage_capacity",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "ad_id": {"type": "string", "description": "FINN ad id for the listing"},
+            "car_name": {"type": "string", "description": "Make and model string"},
+            "query": {"type": "string", "description": "Search query used to find capacity"},
+            "trunk_volume_liters": {
+                "type": ["number", "null"],
+                "description": "Main trunk/luggage capacity in liters. Convert cubic meters to liters when needed.",
+            },
+            "source_url": {
+                "type": ["string", "null"],
+                "description": "URL where the capacity was found",
+                "format": "uri-reference",
+            },
+            "note": {
+                "type": "string",
+                "description": "Short note. Use 'searched but did not find trunk volume' when no value could be found.",
+            },
+        },
+        "required": ["ad_id", "car_name", "query", "note"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
 
 # ---------- CONFIGURATION ------------------------------------------------------------
 # The JSON produced by scrape.py:
@@ -101,6 +137,25 @@ DEFAULT_OUTPUT_PATH = Path(f"summary - {datetime.date.today().isoformat()}.txt")
 DESCRIPTION_CACHE_PATH = Path("listing_cache.json")
 DESCRIPTION_CACHE_TTL = datetime.timedelta(hours=12)
 TOP_DEALS = 10
+
+
+class BaggageSpec(BaseModel):
+    """Structured baggage data returned from web search."""
+
+    ad_id: str = Field(default="")
+    car_name: str = Field(default="")
+    query: str = Field(default="")
+    trunk_volume_liters: Optional[float] = Field(default=None)
+    source_url: Optional[str] = Field(default=None)
+    note: str = Field(default="searched but did not find trunk volume")
+
+    def display_line(self) -> str:
+        label = f"{self.car_name} (ad {self.ad_id})"
+        if self.trunk_volume_liters is not None:
+            liters = round(self.trunk_volume_liters)
+            source = self.source_url or "source not captured"
+            return f"- {label}: ~{liters} L (source: {source})"
+        return f"- {label}: {self.note or 'searched but did not find trunk volume'}"
 
 # ---------- HELPER FUNCTIONS ---------------------------------------------------------
 def load_delta(path):
@@ -113,6 +168,177 @@ def load_delta(path):
     except json.JSONDecodeError as e:
         print(f"Error parsing JSON: {e}")
         sys.exit(1)
+
+
+def extract_response_text(response):
+    """Best-effort extraction of text from OpenAI Responses objects."""
+
+    if getattr(response, "output_text", None):
+        return response.output_text
+
+    texts = []
+
+    def walk(node):
+        if isinstance(node, str):
+            if node.strip():
+                texts.append(node)
+            return
+        if isinstance(node, dict):
+            if isinstance(node.get("text"), str) and node["text"].strip():
+                texts.append(node["text"])
+            for val in node.values():
+                walk(val)
+            return
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+            return
+        # Try model_dump on pydantic-like objects
+        try:
+            dumped = node.model_dump()
+            walk(dumped)
+        except Exception:
+            pass
+        # Fallback: inspect attributes for .text
+        text_attr = getattr(node, "text", None)
+        if isinstance(text_attr, str) and text_attr.strip():
+            texts.append(text_attr)
+
+    # Walk both model_dump (if available) and raw output
+    try:
+        walk(response.model_dump())
+    except Exception:
+        pass
+    walk(getattr(response, "output", []))
+
+    if texts:
+        return "\n".join(texts)
+    raise ValueError("No textual output found in response.")
+
+
+def coerce_json_from_text(text: str) -> str:
+    """Strip code fences and whitespace to get raw JSON string."""
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        # Remove fences like ```json ... ```
+        cleaned = re.sub(r"^```[a-zA-Z0-9]*\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    # Trim any stray text before/after a JSON object
+    if cleaned and cleaned[0] != "{":
+        brace_index = cleaned.find("{")
+        if brace_index != -1:
+            cleaned = cleaned[brace_index:]
+    if cleaned and cleaned[-1] != "}":
+        last_brace = cleaned.rfind("}")
+        if last_brace != -1:
+            cleaned = cleaned[: last_brace + 1]
+    return cleaned
+
+
+def build_baggage_query(entry: dict) -> str:
+    """Create a focused search query for trunk/luggage capacity."""
+    parts = [
+        str(entry.get("title") or "").strip(),
+        str(entry.get("year") or "").strip(),
+        "boot space luggage capacity liters cubic meters",
+    ]
+    return " ".join(p for p in parts if p).strip()
+
+
+def call_baggage_search(entry: dict, verbose: bool = False) -> BaggageSpec:
+    """Use OpenAI web search to find trunk volume for a listing."""
+    query = build_baggage_query(entry)
+    user_msg = (
+        "Find trunk/luggage capacity for this car using web_search.\n"
+        "Return JSON matching this schema keys: "
+        "{ad_id, car_name, query, trunk_volume_liters (number|null), source_url (string|null), note (string)}.\n"
+        "Rules: Prefer liters; if only m^3, convert to liters. Cite one source_url when a number is given. "
+        "If you cannot find a reliable value after searching, set trunk_volume_liters:null and note:'searched but did not find trunk volume'. "
+        "Respond with JSON only.\n\n"
+        f"Listing data:\n"
+        f"ad_id: {entry.get('ad_id')}\n"
+        f"title: {entry.get('title')}\n"
+        f"year: {entry.get('year')}\n"
+        f"url: {entry.get('url')}\n"
+        f"search query: {query}\n"
+    )
+
+    try:
+        response = client.responses.create(
+            model="gpt-5",
+            input=[
+                {"role": "system", "content": BAGGAGE_SEARCH_SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            tools=[{"type": "web_search"}],
+            reasoning={"effort": "low"},
+            max_output_tokens=1800,
+        )
+        raw_text = extract_response_text(response)
+        if verbose and not raw_text.strip():
+            print(f"[debug] Empty output_text for ad {entry.get('ad_id')}, full response follows:")
+            try:
+                print(json.dumps(response.model_dump(), indent=2, ensure_ascii=False))
+            except Exception:
+                print(response)
+        payload = coerce_json_from_text(raw_text)
+        if not payload.strip():
+            raise ValueError("Empty payload after extraction.")
+        parsed = json.loads(payload)
+        parsed.setdefault("ad_id", str(entry.get("ad_id", "")))
+        parsed.setdefault("car_name", entry.get("title") or "unknown")
+        parsed.setdefault("query", query)
+        if parsed.get("trunk_volume_liters") is None and not parsed.get("note"):
+            parsed["note"] = "searched but did not find trunk volume"
+        spec = BaggageSpec.model_validate(parsed)
+    except (ValidationError, ValueError, json.JSONDecodeError) as e:
+        if verbose:
+            print(f"Baggage parsing failed for ad {entry.get('ad_id')}: {e}")
+            try:
+                print(json.dumps(response.model_dump(), indent=2, ensure_ascii=False))
+            except Exception:
+                pass
+        spec = BaggageSpec(
+            ad_id=str(entry.get("ad_id", "")),
+            car_name=entry.get("title") or "unknown",
+            query=query,
+            trunk_volume_liters=None,
+            source_url=None,
+            note="searched but did not find trunk volume",
+        )
+    except Exception as e:
+        if verbose:
+            print(f"Web search failed for ad {entry.get('ad_id')}: {e}")
+            try:
+                print(json.dumps(response.model_dump(), indent=2, ensure_ascii=False))
+            except Exception:
+                pass
+        spec = BaggageSpec(
+            ad_id=str(entry.get("ad_id", "")),
+            car_name=entry.get("title") or "unknown",
+            query=query,
+            trunk_volume_liters=None,
+            source_url=None,
+            note=f"search failed: {e}",
+        )
+    return spec
+
+
+def gather_baggage_specs(listings, show_progress: bool = False):
+    """Run baggage search for each shortlisted listing."""
+    specs = []
+    iterator = tqdm(listings, desc="Web searching trunk volume", disable=not show_progress)
+    for entry in iterator:
+        specs.append(call_baggage_search(entry, verbose=show_progress))
+    return specs
+
+
+def format_baggage_section(specs):
+    """Return a Markdown-ready baggage section."""
+    if not specs:
+        return ""
+    lines = [spec.display_line() for spec in specs]
+    return "Baggage space (web search):\n" + "\n".join(lines)
 
 
 def format_listings(listings, show_progress=False):
@@ -196,12 +422,16 @@ def parse_selected_ids(text):
     - Captures 6+ digit ID tokens
     - Also attempts to extract IDs from found FINN URLs
     """
-    ids = set(re.findall(r"\b\d{9}\b", text))
-    urls = set(re.findall(r"https?://www\.finn\.no/mobility/item/\d{9}\b", text))
+    ids = set(re.findall(r"\b\d{6,9}\b", text))
+    urls = set(re.findall(r"https?://(?:www\.)?finn\.no[^\s)]+", text))
 
-    # Extract IDs from FINN-like URLs (…/item/123456789)
+    # Extract IDs from FINN-like URLs (item/123..., ad.html?finnkode=123...)
     for u in list(urls):
-        m = re.search(r"/item/(\d{9})\b", u)
+        m = re.search(r"[?&]finnkode=(\d{6,9})\b", u)
+        if m:
+            ids.add(m.group(1))
+            continue
+        m = re.search(r"/item/(\d{6,9})\b", u)
         if m:
             ids.add(m.group(1))
     return ids, urls
@@ -299,7 +529,7 @@ if __name__ == "__main__":
 
         if args.use_llm_shortlist:
             if args.verbose:
-                print("Calling initial LLM shortlist…")
+                print("Calling initial LLM shortlist...")
             formatted_listing_text = format_listings(listings, show_progress=args.verbose)
             first_response = call_initial_prompt(formatted_listing_text, len(listings))
             ids, urls = parse_selected_ids(first_response)
@@ -330,7 +560,7 @@ if __name__ == "__main__":
                 to_fetch.append(entry)
 
         if to_fetch and args.verbose:
-            print(f"Fetching {len(to_fetch)} listing descriptions…")
+            print(f"Fetching {len(to_fetch)} listing descriptions...")
 
         for entry in tqdm(to_fetch, desc="Fetching descriptions", disable=not args.verbose):
             entry.update(fetch_listing_details(entry.get("url")))
@@ -348,6 +578,10 @@ if __name__ == "__main__":
 
         listings_with_desc = format_listings_with_description(shortlisted, show_progress=args.verbose)
         summary = call_ranking_prompt(listings_with_desc)
+        baggage_specs = gather_baggage_specs(shortlisted, show_progress=args.verbose)
+        baggage_section = format_baggage_section(baggage_specs)
+        if baggage_section:
+            summary = f"{summary}\n\n{baggage_section}"
 
     print(summary)
     output_targets = {DEFAULT_OUTPUT_PATH}

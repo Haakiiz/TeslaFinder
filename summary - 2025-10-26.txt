@@ -1,0 +1,18 @@
+Preliminary checklist:
+- Parse each listing’s full description for family-relevant signals (space, trunk, stroller fit, ISOFIX, seats, etc.).
+- Flag explicit mentions of family-friendliness and cargo practicality.
+- Note any warnings about price realism or other red flags stated in the ad.
+- Break ties using description strength first, then price/mileage if needed.
+- Include only one Tesla Model Y in the final ranking.
+
+I only received 2 listings (both Tesla Model Y), and both have empty or truncated descriptions with no family-related details. Eight listings are missing. I can’t complete a proper 10-car family ranking without the remaining ads and full descriptions. Below is a provisional pick per the “only one Model Y” rule:
+
+1. [429630503](https://www.finn.no/mobility/item/429630503) [Tesla Model Y, 347,343 NOK and 72,000 km] – Description is blank, so no family features (trunk size, stroller fit, ISOFIX, fold-flat seats) are mentioned. Provisionally selected over the other Model Y due to lower mileage and newer year; no price-warning notes provided.
+
+Note: The other Model Y ad (431867314) is excluded to comply with the “only one Tesla Model Y” rule; its description appears to contain only dealer opening hours and no family-related info.
+
+Please provide:
+- The remaining 8 listings (ad_id | title | year | mileage | price | location | url | full description), without truncation.
+- If possible, ensure descriptions include any notes on trunk capacity, stroller fit, rear-seat space, ISOFIX count, fold-flat/60-40 split seats, roof rails/tow bar (for roof box/bike rack), and any price realism or condition notes.
+
+I’ll deliver a complete, family-focused ranking as soon as I have the full 10 listings and descriptions.
