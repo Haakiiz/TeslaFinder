@@ -1,118 +1,181 @@
 # FinnFinder
 
-Generic Finn.no scraper + LLM ranking pipeline. Configured entirely through `searches.yaml` — no code changes needed to add a new search.
+En Python-app som overvåker Finn.no for ting du vil kjøpe (brukt Tesla, barnestol, gitar, hva som helst), og bruker en LLM (ChatGPT/Claude/Grok) til å rangere de beste annonsene for deg.
 
-## Setup
+---
 
-```bash
-python3 -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-playwright install chromium
+## Hvordan det funker (det store bildet)
+
+Du har én app med to steg:
+
+1. **`scrape.py`** — går til Finn.no, henter annonser, lagrer i en lokal database, og skriver ut bare det som er nytt eller endret siden sist.
+2. **`LLM_Summariser.py`** — leser ut det nye, sender til en LLM med din "brief" (f.eks. "jeg leter etter familievennlig elbil"), og får tilbake en rangert toppliste.
+
+Det viktigste å skjønne: **du har én app, ikke flere. Alt du vil søke etter står i én konfigurasjonsfil — `searches.yaml`.**
+
 ```
-
-Copy `.env.example` to `.env` and fill in the API keys you need:
-
-```
-OPENAI_API_KEY=sk-...       # required for provider: openai
-ANTHROPIC_API_KEY=sk-ant-... # required for provider: claude
-GROK_API_KEY=xai-...        # required for provider: grok
+                ┌─────────────────┐
+                │  searches.yaml  │  ← Her står alle søkene dine
+                └────────┬────────┘
+                         │
+            ┌────────────┴────────────┐
+            ▼                         ▼
+      ┌──────────┐              ┌─────────────────┐
+      │ scrape   │ ───────────▶ │  LLM_Summariser │
+      │   .py    │  delta_*.json│       .py       │
+      └──────────┘              └────────┬────────┘
+                                         │
+                                         ▼
+                                  summary - <søk> - <dato>.txt
 ```
 
 ---
 
-## How to add a new search
+## Førstegangs-oppsett
 
-**1. Find the Finn.no search URL**
+Disse kommandoene kjører du én gang når du klona repoet:
 
-Go to finn.no, set your filters, and copy the URL from the browser. Example for baby chairs:
+```bash
+python3 -m venv venv               # Lager et "isolert" Python-miljø
+source venv/bin/activate           # Aktiverer det (Windows: venv\Scripts\activate)
+pip install -r requirements.txt    # Installerer alle Python-bibliotekene
+playwright install chromium        # Installerer en headless nettleser (brukes til å scrape Finn.no)
 ```
-https://www.finn.no/recommerce/forsale/search?q=barnestol&location=0.20002
+
+Deretter må du lage en fil som heter `.env` i hovedmappen, med API-nøklene dine:
+
+```
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+GROK_API_KEY=xai-...
 ```
 
-**2. Add an entry in `searches.yaml`**
+Du trenger bare nøkkelen for de LLM-providerne du faktisk bruker. Hvis alle søkene dine bruker `provider: openai`, holder det med `OPENAI_API_KEY`.
+
+---
+
+## Hvordan legge til et nytt søk (steg for steg)
+
+La oss si du vil overvåke barnestoler på Finn.no.
+
+### Steg 1 — Finn URL-en på Finn.no
+
+Gå til [finn.no](https://www.finn.no), skriv inn det du leter etter (f.eks. "barnestol"), og sett alle filtrene du vil ha (pris, sted osv.). Når du er fornøyd, **kopier hele URL-en fra adressefeltet i nettleseren**.
+
+Eksempel: `https://www.finn.no/recommerce/forsale/search?q=barnestol&location=0.20002`
+
+### Steg 2 — Åpne `searches.yaml` og legg til en ny blokk
+
+Filen ser slik ut etter at du har lagt til barnestol:
 
 ```yaml
 searches:
-  - name: my_search           # used for filenames (delta_my_search.json, summary file)
-    description: "What this search is for"
-    finn_url: "https://www.finn.no/..."
+
+  - name: tesla_model_y
+    description: "Tesla Model Y, Østlandet, maks 500k NOK"
+    finn_url: "https://www.finn.no/mobility/search/car?body_type=2&..."
     filters:
-      price_max: 2000         # max price in NOK (optional)
-      year_min: 2018          # oldest model year, cars only (optional)
-      mileage_max: 80000      # max km, cars only (optional)
-      exclude_keywords:       # skip listings containing these words in title/URL
-        - "skadet"
-        - "ødelagt"
+      price_max: 500000
+      year_min: 2019
+      mileage_max: 100000
+      exclude_keywords: ["import", "skadet"]
     llm:
-      provider: openai        # openai | claude | grok
-      # model: gpt-4o         # optional override (see defaults below)
+      provider: openai
     llm_context: |
-      Describe what you're looking for and what matters most.
-      The LLM uses this as its evaluation brief.
+      Evaluate used Tesla Model Y in Norway for a family with a young child.
+
+  # ← Det er her du legger inn det nye søket:
+  - name: barnestol
+    description: "Brukt barnestol, Østlandet, maks 1500 NOK"
+    finn_url: "https://www.finn.no/recommerce/forsale/search?q=barnestol&location=0.20002"
+    filters:
+      price_max: 1500
+      exclude_keywords: ["skadet", "ødelagt"]
+    llm:
+      provider: claude
+    llm_context: |
+      Brukt barnestol til 1-åring. Prioriter: god stand, trygghet, god pris.
+      Skip annonser som er åpenbart slitne eller mangler bilder.
 ```
 
-All filter fields are optional — omit any you don't need.
+**Forklaring av feltene:**
 
-**Default models per provider:**
-| Provider | Default model |
-|----------|--------------|
-| openai   | gpt-5 |
-| claude   | claude-opus-4-7 |
-| grok     | grok-3 |
+| Felt | Hva det gjør | Påkrevd? |
+|------|--------------|----------|
+| `name` | Kort navn (brukes i filnavn). Ingen mellomrom — bruk underscore. | Ja |
+| `description` | En setning som forteller deg selv hva søket er for | Nei (men greit å ha) |
+| `finn_url` | URL-en du kopierte fra Finn.no | Ja |
+| `filters.price_max` | Maks pris i NOK | Nei |
+| `filters.year_min` | Tidligste årsmodell (kun for biler) | Nei |
+| `filters.mileage_max` | Maks kilometer (kun for biler) | Nei |
+| `filters.exclude_keywords` | Hvis annonsen inneholder noen av disse ordene → hopp over | Nei |
+| `llm.provider` | Hvilken AI som skal rangere: `openai`, `claude` eller `grok` | Ja |
+| `llm.model` | Spesifikk modell (f.eks. `gpt-4o`). Hvis du ikke skriver noe, brukes default. | Nei |
+| `llm_context` | "Brief"-en til AI-en — hva den skal se etter. Skriv naturlig på norsk eller engelsk. | Ja |
 
-**3. Run the scraper**
+### Steg 3 — Kjør scraperen
 
 ```bash
-# Run just your new search
-python scrape.py --search my_search
+# Kjør bare det nye søket:
+python scrape.py --search barnestol
 
-# Run all searches in searches.yaml
+# Eller kjør alle søk (Tesla + barnestol):
 python scrape.py
 ```
 
-This writes `delta_my_search.json` with new/changed listings since last run.
+Dette lager en fil `delta_barnestol.json` med alle nye/endrede annonser.
 
-**4. Run the LLM summariser**
+### Steg 4 — Be AI-en rangere
 
 ```bash
-python LLM_Summariser.py --search my_search
-
-# With progress output
-python LLM_Summariser.py --search my_search --verbose
-
-# Use a first-pass LLM shortlist before the ranking step (slower, uses more tokens)
-python LLM_Summariser.py --search my_search --use-llm-shortlist
+python LLM_Summariser.py --search barnestol
 ```
 
-Output is printed to terminal and saved to `summary - my_search - YYYY-MM-DD.txt`.
+Resultatet vises i terminalen og lagres i `summary - barnestol - 2026-05-09.txt`.
+
+Legg til `--verbose` hvis du vil se framdrift mens den jobber.
 
 ---
 
-## Switching LLM provider
+## Bytte mellom OpenAI, Claude og Grok
 
-Change `llm.provider` in `searches.yaml` for any search. Each search can use a different provider independently.
+Bare endre `provider`-linjen i `searches.yaml`:
 
 ```yaml
 llm:
-  provider: claude       # switch from openai to claude
-  # model: claude-sonnet-4-6  # optionally pin a specific model
+  provider: claude     # bytt fra openai til claude
 ```
 
-Make sure the corresponding API key is set in `.env`.
+Hver søk kan ha sin egen provider. Tesla kan bruke OpenAI mens barnestol bruker Claude — det er helt opp til deg.
 
-> **Note:** The trunk/baggage web search step in `LLM_Summariser.py` uses OpenAI's Responses API (web_search tool) and only runs when `provider: openai` is set. It is skipped for claude and grok.
+**Default-modeller** (brukes hvis du ikke spesifiserer `model`):
+- `openai` → `gpt-5`
+- `claude` → `claude-opus-4-7`
+- `grok` → `grok-3`
+
+> Merk: Det ekstra "bagasjeromsstørrelse"-søket (kun relevant for biler) bruker en spesiell OpenAI-funksjon (web search). Det hoppes automatisk over hvis du bruker Claude eller Grok.
 
 ---
 
-## State and files
+## Filer du vil møte
 
-| File | Purpose |
-|------|---------|
-| `searches.yaml` | All search configurations |
-| `listings.db` | SQLite — one row per (ad_id, search_name), deduplication state |
-| `delta_<name>.json` | Output of last scrape run — consumed by summariser |
-| `listing_cache.json` | Cached ad descriptions (12h TTL) |
-| `summary - <name> - <date>.txt` | LLM ranking output |
+| Fil | Hva det er |
+|-----|------------|
+| `searches.yaml` | **Konfigurasjon — den eneste filen du trenger å redigere** |
+| `scrape.py` | Selve scraperen (du kjører den, men trenger ikke endre den) |
+| `LLM_Summariser.py` | LLM-rangereren |
+| `listings.db` | SQLite-database der alle annonser huskes (slik at neste kjøring vet hva som er nytt) |
+| `delta_<navn>.json` | Output fra scraperen — sendt til summariseren |
+| `listing_cache.json` | Mellomlagring av annonsetekster (12 timer) for å spare API-kall |
+| `summary - <navn> - <dato>.txt` | LLM-rangeringen — det endelige resultatet |
+| `.env` | API-nøklene dine (ikke committ denne!) |
 
-Rows in `listings.db` are pruned after 30 days automatically.
+Annonser eldre enn 30 dager slettes automatisk fra databasen.
+
+---
+
+## Branch-forklaring (hvis du er forvirret over Git)
+
+Repoet har én hovedbranch — `master` — som inneholder den allsidige koden.
+
+**Du trenger IKKE en branch per søk.** Tesla, barnestol, gitar — alt ligger på samme branch og styres av `searches.yaml`. Det er hele poenget med refaktoret: én kodebase, mange søk.
