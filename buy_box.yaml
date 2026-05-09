@@ -1,8 +1,0 @@
-price_max: 500000      # in NOK
-year_min: 2019
-mileage_max: 100000     # in km
-must_include_images: True
-exclude_keywords:
-  - "import"
-  - "skadet"
-  - "tidligere takst"
