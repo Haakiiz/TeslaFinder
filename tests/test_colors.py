@@ -4,7 +4,7 @@ from pathlib import Path
 
 # Ensure repository root is on sys.path when tests run under pytest's importlib mode
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from scrape import Listing, matches_buy_box
+from scrape import Listing, matches_filters
 
 
 SPEC_BASE = {
@@ -25,10 +25,10 @@ def make_spec(**kwargs):
 def test_norwegian_black_matches_spec(nocolor):
     spec = make_spec(color=["black"])
     lst = Listing(ad_id="1", url="", price=0, year=2022, mileage=0, color=nocolor, location="")
-    assert matches_buy_box(lst, spec)
+    assert matches_filters(lst, spec)
 
 
 def test_norwegian_black_rejected_when_not_in_spec():
     spec = make_spec(color=["white"])
     lst = Listing(ad_id="1", url="", price=0, year=2022, mileage=0, color="svart", location="")
-    assert not matches_buy_box(lst, spec)
+    assert not matches_filters(lst, spec)

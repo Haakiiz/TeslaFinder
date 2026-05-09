@@ -116,29 +116,53 @@ def matches_filters(lst: Listing, filters: Dict[str, Any]) -> bool:
     return True
 
 
+SCHEMA_SQL = """CREATE TABLE listings (
+    ad_id       TEXT NOT NULL,
+    search_name TEXT NOT NULL DEFAULT '',
+    url         TEXT,
+    price       INTEGER,
+    year        INTEGER,
+    mileage     INTEGER,
+    color       TEXT,
+    location    TEXT,
+    first_seen  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_seen   TIMESTAMP,
+    hash        TEXT,
+    PRIMARY KEY (ad_id, search_name)
+)"""
+
+
 def init_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS listings (
-               ad_id       TEXT NOT NULL,
-               search_name TEXT NOT NULL DEFAULT '',
-               url         TEXT,
-               price       INTEGER,
-               year        INTEGER,
-               mileage     INTEGER,
-               color       TEXT,
-               location    TEXT,
-               first_seen  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-               last_seen   TIMESTAMP,
-               hash        TEXT,
-               PRIMARY KEY (ad_id, search_name)
-        );"""
-    )
-    # migrate: add search_name column if upgrading from old single-search schema
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(listings)").fetchall()}
-    if "search_name" not in cols:
-        conn.execute("ALTER TABLE listings ADD COLUMN search_name TEXT NOT NULL DEFAULT 'tesla_model_y'")
-    conn.commit()
+    cur = conn.cursor()
+
+    exists = cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='listings'"
+    ).fetchone()
+    if not exists:
+        cur.execute(SCHEMA_SQL)
+        conn.commit()
+        return conn
+
+    cols_info = cur.execute("PRAGMA table_info(listings)").fetchall()
+    col_names = {r[1] for r in cols_info}
+    pk_cols = [r[1] for r in cols_info if r[5] > 0]
+
+    needs_rebuild = ("search_name" not in col_names) or (set(pk_cols) != {"ad_id", "search_name"})
+    if needs_rebuild:
+        logging.info("Migrating listings.db to multi-search schema...")
+        cur.execute("ALTER TABLE listings RENAME TO listings_old")
+        cur.execute(SCHEMA_SQL)
+        old_cols = {r[1] for r in cur.execute("PRAGMA table_info(listings_old)").fetchall()}
+        sn_select = "search_name" if "search_name" in old_cols else "'tesla_model_y' AS search_name"
+        cur.execute(
+            f"""INSERT OR IGNORE INTO listings
+                (ad_id, search_name, url, price, year, mileage, color, location, first_seen, last_seen, hash)
+                SELECT ad_id, {sn_select}, url, price, year, mileage, color, location, first_seen, last_seen, hash
+                FROM listings_old"""
+        )
+        cur.execute("DROP TABLE listings_old")
+        conn.commit()
     return conn
 
 

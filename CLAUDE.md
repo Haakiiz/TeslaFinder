@@ -57,6 +57,8 @@ The trunk/baggage web-search step uses OpenAI's Responses API and only runs when
 
 **Key coupling:** The HTML regex in `Listing.from_card()` targets Finn.no's shared card structure (CSS classes `sf-search-ad-link`, `t3 font-bold inline-block`, `text-detail flex-col flex s-text-subtle`). Year/mileage parsing assumes the `YYYY • NNN km` pattern common to vehicle and some other categories. Non-vehicle searches that lack year/mileage will parse those as 0 and the optional filters will skip those checks.
 
-## Branch policy
+## Branch model
 
-Develop on `claude/flexible-multi-item-search-2tZYo`; do not push to `master` without explicit permission.
+There is **one branch model**: `master` holds the generic multi-search codebase. Different searches (Tesla, baby chair, etc.) are NOT separate branches — they are entries in `searches.yaml`. Do not create per-search branches; add a new entry to `searches.yaml` instead.
+
+When working in a Claude Code session, develop on `claude/flexible-multi-item-search-2tZYo` (or whichever feature branch the user is on) and do not push to `master` without explicit permission.
