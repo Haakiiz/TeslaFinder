@@ -1,6 +1,15 @@
-# LLM_summariser.py
+# LLM_Summariser.py
 # ------------------
-# Reads `delta_listings.json`, constructs a prompt for an LLM, and outputs a human-readable summary.
+# Reads delta_<search>.json, ranks listings with an LLM, and writes a summary file.
+#
+# Usage:
+#   python LLM_Summariser.py --search tesla_model_y [--verbose] [--use-llm-shortlist]
+#
+# Provider is configured per-search in searches.yaml (llm.provider: openai|claude|grok).
+# Required env vars:
+#   OPENAI_API_KEY  – for provider: openai
+#   ANTHROPIC_API_KEY – for provider: claude
+#   GROK_API_KEY    – for provider: grok
 
 import json
 import os
@@ -8,22 +17,31 @@ import sys
 import argparse
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
+import yaml
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, ValidationError
 from tqdm import tqdm
+
 load_dotenv()
+
 import datetime
-from openai import OpenAI
-client = OpenAI()
+
+# ---------- DEFAULT MODELS PER PROVIDER ----------------------------------------------
+DEFAULT_MODELS: Dict[str, str] = {
+    "openai": "gpt-5",
+    "claude": "claude-opus-4-7",
+    "grok": "grok-3",
+}
 
 # ---------- PROMPT TEMPLATES ---------------------------------------------------------
-INITIAL_PROMPT_TEMPLATE = """Evaluate listings for electric cars in Norway suitable for a couple with a 16-month-old baby. Identify cars with good space for a stroller. Prioritize the following factors: price (lower is better), model year (newer is better), and mileage (lower is better). Provide concise justifications for your selections. Ensure the shortlist contains at least one Tesla Model Y if any are present, but do not limit the list to Model Y only.
+INITIAL_PROMPT_TEMPLATE = """{context}
 
-There are {num_listings} new or updated listings. Shortlist the top {top_deals} best deals. Below are the listings (ad_id | title | year | mileage | price | location | url):
+There are {num_listings} new or updated listings. Shortlist the top {top_deals} best deals. \
+Below are the listings (ad_id | title | year | mileage | price | location | url):
 {listings}
 
 ## Output Format
@@ -33,33 +51,34 @@ Return the response in Markdown format:
 - For each bullet, include:
   - ad_id
   - URL
-  - A brief justification or key factors that influenced the selection (such as model year, price, space, etc.).
+  - A brief justification or key factors that influenced the selection.
 - Example:
 
   - ad_id: 12345 | [URL](https://example.com/12345) - Reason: Newest model, lowest mileage, best price.
   - ad_id: 98765 | [URL](https://example.com/98765) - Reason: Spacious, recent year, affordable.
 
-If there are fewer than {top_deals} qualifying listings, return as many as are available. If multiple listings are equally ranked, select based on the best combination of price, model year, and mileage. If a listing has missing or inconsistent data, briefly note it in the justification. Include at least one Tesla Model Y if any are present; otherwise, select the best overall deals."""
+If there are fewer than {top_deals} qualifying listings, return as many as are available. \
+If a listing has missing or inconsistent data, briefly note it."""
 
 RANKING_PROMPT_TEMPLATE = """# Role and Objective
-- Evaluate and rank provided electric car listings from FINN.no for a couple in Norway with a 16-month-old baby, focusing on family suitability using full description analysis.
+{context}
 
 # Preliminary Checklist
 Begin with a concise checklist (3-7 bullets) of what you will do; keep items conceptual, not implementation-level.
 
 # Instructions
-- Assess the provided {top_deals} electric car listings, already pre-filtered by basic metrics (price, mileage, year), using detailed description text to finalize the ranking for a family use case.
-- Prioritize listings offering spacious interiors, ample trunk capacity (particularly for carrying a stroller), and other family-friendly or child-related features.
-- Be alert to notes regarding price realism (e.g., low price warnings), and mention any significant pros or cons from the description.
+- Assess the provided {top_deals} listings, already pre-filtered by basic metrics (price, mileage, year), \
+using detailed description text to finalize the ranking.
+- Be alert to notes regarding price realism (e.g., low price warnings), and mention any significant pros or cons \
+from the description.
 
 ## Guidelines for Review and Ranking
 - Examine signals including, but not limited to:
   - Interior or trunk space
-  - Specific mentions of family-friendliness or ability to fit strollers/luggage
+  - Condition or any red flags in the description
   - Warnings or red flags in price-value proposition
   - Other important pros/cons
-- Only consider information explicitly present in the descriptions; if key information is missing or partial, state so directly.
-- Ensure the final top list includes at least one Tesla Model Y if any are present, while still allowing other makes/models to appear.
+- Only consider information explicitly present in the descriptions; if key information is missing, state so directly.
 - Do not introduce new or external listings; only rank those provided.
 
 # Input Context
@@ -70,29 +89,19 @@ Begin with a concise checklist (3-7 bullets) of what you will do; keep items con
 # Output Format
 Return the ranking in Markdown as follows:
 
-1. [ad_id](url) [Car name, Price and Km] - Brief justification (1-3 sentences, grounded in description and family relevance)
-2. [ad_id](url) [Car name, Price and Km] - Brief justification (1-3 sentences)
+1. [ad_id](url) [Item name, Price] - Brief justification (1-3 sentences, grounded in description)
+2. [ad_id](url) [Item name, Price] - Brief justification (1-3 sentences)
 ...
 
-
-- Use ranking ties if warranted, adjusting numbering accordingly.
+- Use ranking ties if warranted.
 - For incomplete, vague, or missing descriptions, the justification must state this clearly.
-- Highlight which family-related features are mentioned or omitted.
-- Must add at least one Tesla Model Y in the list when present
 
 # Reasoning Steps
-- Analyze each description for space, child/travel suitability, and price cues.
-- Identify and resolve ties by evaluating described features, price, and mileage.
-- Conclude with the required signature statement.
+- Analyze each description for relevant quality signals.
+- Identify and resolve ties by evaluating described features and price.
 
 # Verbosity
-- Keep justifications concise and targeted (1-3 clear sentences).
-
-# Agentic Balance
-Attempt a first pass autonomously unless missing critical info; stop and ask for clarification if key success criteria or constraints cannot be met due to missing information.
-
-# Stop Conditions
-- Ranking list complete with appropriate tie handling, all requested constraints satisfied, closing statement included."""
+Keep justifications concise and targeted (1-3 clear sentences)."""
 
 BAGGAGE_SEARCH_SYSTEM_PROMPT = """You are a car-spec research assistant. Use the web_search tool to find trunk/luggage capacity for the provided car.
 - Prefer liters; if only cubic meters are available, convert to liters (1 m^3 = 1000 liters).
@@ -106,22 +115,12 @@ BAGGAGE_JSON_SCHEMA = {
     "schema": {
         "type": "object",
         "properties": {
-            "ad_id": {"type": "string", "description": "FINN ad id for the listing"},
-            "car_name": {"type": "string", "description": "Make and model string"},
-            "query": {"type": "string", "description": "Search query used to find capacity"},
-            "trunk_volume_liters": {
-                "type": ["number", "null"],
-                "description": "Main trunk/luggage capacity in liters. Convert cubic meters to liters when needed.",
-            },
-            "source_url": {
-                "type": ["string", "null"],
-                "description": "URL where the capacity was found",
-                "format": "uri-reference",
-            },
-            "note": {
-                "type": "string",
-                "description": "Short note. Use 'searched but did not find trunk volume' when no value could be found.",
-            },
+            "ad_id": {"type": "string"},
+            "car_name": {"type": "string"},
+            "query": {"type": "string"},
+            "trunk_volume_liters": {"type": ["number", "null"]},
+            "source_url": {"type": ["string", "null"], "format": "uri-reference"},
+            "note": {"type": "string"},
         },
         "required": ["ad_id", "car_name", "query", "note"],
         "additionalProperties": False,
@@ -130,18 +129,53 @@ BAGGAGE_JSON_SCHEMA = {
 }
 
 # ---------- CONFIGURATION ------------------------------------------------------------
-# The JSON produced by scrape.py:
-DELTA_PATH = "delta_listings.json"
-# If desired, redirect summary to a file:
-DEFAULT_OUTPUT_PATH = Path(f"summary - {datetime.date.today().isoformat()}.txt")
+SEARCHES_PATH = Path("searches.yaml")
 DESCRIPTION_CACHE_PATH = Path("listing_cache.json")
 DESCRIPTION_CACHE_TTL = datetime.timedelta(hours=12)
 TOP_DEALS = 10
 
 
-class BaggageSpec(BaseModel):
-    """Structured baggage data returned from web search."""
+# ---------- PROVIDER ABSTRACTION -----------------------------------------------------
+def call_llm(prompt: str, provider: str, model: str | None = None) -> str:
+    """Call the configured LLM provider with a plain text prompt."""
+    model = model or DEFAULT_MODELS[provider]
 
+    if provider == "openai":
+        from openai import OpenAI
+        client = OpenAI()
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.choices[0].message.content
+
+    if provider == "claude":
+        import anthropic
+        client = anthropic.Anthropic()
+        msg = client.messages.create(
+            model=model,
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return msg.content[0].text
+
+    if provider == "grok":
+        from openai import OpenAI
+        client = OpenAI(
+            base_url="https://api.x.ai/v1",
+            api_key=os.environ["GROK_API_KEY"],
+        )
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.choices[0].message.content
+
+    raise ValueError(f"Unknown LLM provider: {provider!r}. Use openai, claude, or grok.")
+
+
+# ---------- DATA MODELS --------------------------------------------------------------
+class BaggageSpec(BaseModel):
     ad_id: str = Field(default="")
     car_name: str = Field(default="")
     query: str = Field(default="")
@@ -157,28 +191,34 @@ class BaggageSpec(BaseModel):
             return f"- {label}: ~{liters} L (source: {source})"
         return f"- {label}: {self.note or 'searched but did not find trunk volume'}"
 
+
 # ---------- HELPER FUNCTIONS ---------------------------------------------------------
-def load_delta(path):
+def load_searches(path: Path = SEARCHES_PATH) -> List[Dict[str, Any]]:
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return data["searches"]
+
+
+def load_delta(search_name: str) -> List[Dict]:
+    path = Path(f"delta_{search_name}.json")
+    # fallback for old single-search runs
+    if not path.exists() and search_name == "tesla_model_y":
+        path = Path("delta_listings.json")
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        print(f"Error: {path} not found.")
+        print(f"Error: {path} not found. Run scrape.py --search {search_name} first.")
         sys.exit(1)
     except json.JSONDecodeError as e:
-        print(f"Error parsing JSON: {e}")
+        print(f"Error parsing {path}: {e}")
         sys.exit(1)
 
 
-def extract_response_text(response):
-    """Best-effort extraction of text from OpenAI Responses objects."""
-
+def extract_response_text(response: Any) -> str:
     if getattr(response, "output_text", None):
         return response.output_text
+    texts: List[str] = []
 
-    texts = []
-
-    def walk(node):
+    def walk(node: Any) -> None:
         if isinstance(node, str):
             if node.strip():
                 texts.append(node)
@@ -193,37 +233,29 @@ def extract_response_text(response):
             for item in node:
                 walk(item)
             return
-        # Try model_dump on pydantic-like objects
         try:
-            dumped = node.model_dump()
-            walk(dumped)
+            walk(node.model_dump())
         except Exception:
             pass
-        # Fallback: inspect attributes for .text
         text_attr = getattr(node, "text", None)
         if isinstance(text_attr, str) and text_attr.strip():
             texts.append(text_attr)
 
-    # Walk both model_dump (if available) and raw output
     try:
         walk(response.model_dump())
     except Exception:
         pass
     walk(getattr(response, "output", []))
-
     if texts:
         return "\n".join(texts)
     raise ValueError("No textual output found in response.")
 
 
 def coerce_json_from_text(text: str) -> str:
-    """Strip code fences and whitespace to get raw JSON string."""
     cleaned = text.strip()
     if cleaned.startswith("```"):
-        # Remove fences like ```json ... ```
         cleaned = re.sub(r"^```[a-zA-Z0-9]*\s*", "", cleaned)
         cleaned = re.sub(r"\s*```$", "", cleaned)
-    # Trim any stray text before/after a JSON object
     if cleaned and cleaned[0] != "{":
         brace_index = cleaned.find("{")
         if brace_index != -1:
@@ -236,7 +268,6 @@ def coerce_json_from_text(text: str) -> str:
 
 
 def build_baggage_query(entry: dict) -> str:
-    """Create a focused search query for trunk/luggage capacity."""
     parts = [
         str(entry.get("title") or "").strip(),
         str(entry.get("year") or "").strip(),
@@ -246,23 +277,21 @@ def build_baggage_query(entry: dict) -> str:
 
 
 def call_baggage_search(entry: dict, verbose: bool = False) -> BaggageSpec:
-    """Use OpenAI web search to find trunk volume for a listing."""
+    """Web-search trunk volume via OpenAI Responses API (OpenAI-only feature)."""
+    from openai import OpenAI
+    client = OpenAI()
+
     query = build_baggage_query(entry)
     user_msg = (
         "Find trunk/luggage capacity for this car using web_search.\n"
-        "Return JSON matching this schema keys: "
-        "{ad_id, car_name, query, trunk_volume_liters (number|null), source_url (string|null), note (string)}.\n"
-        "Rules: Prefer liters; if only m^3, convert to liters. Cite one source_url when a number is given. "
-        "If you cannot find a reliable value after searching, set trunk_volume_liters:null and note:'searched but did not find trunk volume'. "
+        "Return JSON with keys: {ad_id, car_name, query, trunk_volume_liters (number|null), source_url (string|null), note (string)}.\n"
+        "Rules: Prefer liters; if only m^3, convert. Cite one source_url when a number is given. "
+        "If not found, set trunk_volume_liters:null and note:'searched but did not find trunk volume'. "
         "Respond with JSON only.\n\n"
-        f"Listing data:\n"
-        f"ad_id: {entry.get('ad_id')}\n"
-        f"title: {entry.get('title')}\n"
-        f"year: {entry.get('year')}\n"
-        f"url: {entry.get('url')}\n"
-        f"search query: {query}\n"
+        f"ad_id: {entry.get('ad_id')}\ntitle: {entry.get('title')}\nyear: {entry.get('year')}\n"
+        f"url: {entry.get('url')}\nsearch query: {query}\n"
     )
-
+    response = None
     try:
         response = client.responses.create(
             model="gpt-5",
@@ -275,12 +304,6 @@ def call_baggage_search(entry: dict, verbose: bool = False) -> BaggageSpec:
             max_output_tokens=1800,
         )
         raw_text = extract_response_text(response)
-        if verbose and not raw_text.strip():
-            print(f"[debug] Empty output_text for ad {entry.get('ad_id')}, full response follows:")
-            try:
-                print(json.dumps(response.model_dump(), indent=2, ensure_ascii=False))
-            except Exception:
-                print(response)
         payload = coerce_json_from_text(raw_text)
         if not payload.strip():
             raise ValueError("Empty payload after extraction.")
@@ -290,142 +313,76 @@ def call_baggage_search(entry: dict, verbose: bool = False) -> BaggageSpec:
         parsed.setdefault("query", query)
         if parsed.get("trunk_volume_liters") is None and not parsed.get("note"):
             parsed["note"] = "searched but did not find trunk volume"
-        spec = BaggageSpec.model_validate(parsed)
-    except (ValidationError, ValueError, json.JSONDecodeError) as e:
-        if verbose:
-            print(f"Baggage parsing failed for ad {entry.get('ad_id')}: {e}")
-            try:
-                print(json.dumps(response.model_dump(), indent=2, ensure_ascii=False))
-            except Exception:
-                pass
-        spec = BaggageSpec(
-            ad_id=str(entry.get("ad_id", "")),
-            car_name=entry.get("title") or "unknown",
-            query=query,
-            trunk_volume_liters=None,
-            source_url=None,
-            note="searched but did not find trunk volume",
-        )
+        return BaggageSpec.model_validate(parsed)
     except Exception as e:
         if verbose:
-            print(f"Web search failed for ad {entry.get('ad_id')}: {e}")
-            try:
-                print(json.dumps(response.model_dump(), indent=2, ensure_ascii=False))
-            except Exception:
-                pass
-        spec = BaggageSpec(
+            print(f"Baggage search failed for ad {entry.get('ad_id')}: {e}")
+        return BaggageSpec(
             ad_id=str(entry.get("ad_id", "")),
             car_name=entry.get("title") or "unknown",
             query=query,
-            trunk_volume_liters=None,
-            source_url=None,
             note=f"search failed: {e}",
         )
-    return spec
 
 
-def gather_baggage_specs(listings, show_progress: bool = False):
-    """Run baggage search for each shortlisted listing."""
+def gather_baggage_specs(listings: List[dict], show_progress: bool = False) -> List[BaggageSpec]:
     specs = []
-    iterator = tqdm(listings, desc="Web searching trunk volume", disable=not show_progress)
-    for entry in iterator:
+    for entry in tqdm(listings, desc="Web searching trunk volume", disable=not show_progress):
         specs.append(call_baggage_search(entry, verbose=show_progress))
     return specs
 
 
-def format_baggage_section(specs):
-    """Return a Markdown-ready baggage section."""
+def format_baggage_section(specs: List[BaggageSpec]) -> str:
     if not specs:
         return ""
     lines = [spec.display_line() for spec in specs]
     return "Baggage space (web search):\n" + "\n".join(lines)
 
 
-def format_listings(listings, show_progress=False):
-    """Return listing data as formatted lines without units for the first prompt."""
+def format_listings(listings: List[dict], show_progress: bool = False) -> str:
     lines = []
     for entry in tqdm(listings, desc="Formatting listings", disable=not show_progress):
-        ad_id = entry.get("ad_id", "")
-        title = entry.get("title", "")
-        year = entry.get("year", 0)
-        mileage = entry.get("mileage", 0)
-        price = entry.get("price", 0)
-        location = entry.get("location", "")
-        url = entry.get("url", "")
         lines.append(
-            f"{ad_id} | {title} | {year} | {mileage} | {price} | {location} | {url}"
+            f"{entry.get('ad_id','')} | {entry.get('title','')} | {entry.get('year',0)} | "
+            f"{entry.get('mileage',0)} | {entry.get('price',0)} | {entry.get('location','')} | {entry.get('url','')}"
         )
     return "\n".join(lines)
 
 
-def format_listings_with_description(listings, show_progress=False):
-    """Return listing data including description for the ranking prompt."""
+def format_listings_with_description(listings: List[dict], show_progress: bool = False) -> str:
     lines = []
-    iterator = tqdm(listings, desc="Preparing ranking payload", disable=not show_progress)
-    for entry in iterator:
-        ad_id = entry.get("ad_id", "")
-        title = entry.get("title", "")
-        year = entry.get("year", 0)
-        mileage = entry.get("mileage", 0)
-        price = entry.get("price", 0)
-        location = entry.get("location", "")
-        url = entry.get("url", "")
-        description = entry.get("description", "").replace("\n", " ")
+    for entry in tqdm(listings, desc="Preparing ranking payload", disable=not show_progress):
+        desc = entry.get("description", "").replace("\n", " ")
         lines.append(
-            f"{ad_id} | {title} | {year} | {mileage} | {price} | {location} | {url} | {description}"
+            f"{entry.get('ad_id','')} | {entry.get('title','')} | {entry.get('year',0)} | "
+            f"{entry.get('mileage',0)} | {entry.get('price',0)} | {entry.get('location','')} | "
+            f"{entry.get('url','')} | {desc}"
         )
     return "\n".join(lines)
 
 
-
-def call_initial_prompt(listings_text, num_listings):
-    """Call OpenAI with the initial prompt to shortlist listings."""
+def call_initial_prompt(listings_text: str, num_listings: int, context: str, llm_cfg: dict) -> str:
     prompt = INITIAL_PROMPT_TEMPLATE.format(
+        context=context,
         num_listings=num_listings,
         top_deals=TOP_DEALS,
         listings=listings_text,
     )
-    try:
-        response = client.responses.create(
-            model="gpt-5-mini",
-            input=prompt,
-        )
-    except Exception as e:
-        print(f"OpenAI API error: {e}")
-        sys.exit(1)
-
-    return response.output_text
+    return call_llm(prompt, provider=llm_cfg["provider"], model=llm_cfg.get("model"))
 
 
-def call_ranking_prompt(listings_text):
-    """Call OpenAI with the ranking prompt using listing descriptions."""
+def call_ranking_prompt(listings_text: str, context: str, llm_cfg: dict) -> str:
     prompt = RANKING_PROMPT_TEMPLATE.format(
+        context=context,
         top_deals=TOP_DEALS,
         listings=listings_text,
     )
-    try:
-        response = client.responses.create(
-            model="gpt-5",
-            input=prompt,
-        )
-    except Exception as e:
-        print(f"OpenAI API error: {e}")
-        sys.exit(1)
-
-    return response.output_text
+    return call_llm(prompt, provider=llm_cfg["provider"], model=llm_cfg.get("model"))
 
 
-def parse_selected_ids(text):
-    """Extract ad IDs and URLs from an LLM response in a tolerant way.
-
-    - Captures explicit URLs
-    - Captures 6+ digit ID tokens
-    - Also attempts to extract IDs from found FINN URLs
-    """
+def parse_selected_ids(text: str):
     ids = set(re.findall(r"\b\d{6,9}\b", text))
     urls = set(re.findall(r"https?://(?:www\.)?finn\.no[^\s)]+", text))
-
-    # Extract IDs from FINN-like URLs (item/123..., ad.html?finnkode=123...)
     for u in list(urls):
         m = re.search(r"[?&]finnkode=(\d{6,9})\b", u)
         if m:
@@ -437,35 +394,30 @@ def parse_selected_ids(text):
     return ids, urls
 
 
-def shortlist_by_heuristics(listings, limit=TOP_DEALS):
-    """Rank listings by price asc, year desc, mileage asc as a deterministic fallback."""
-
-    def sort_key(entry):
+def shortlist_by_heuristics(listings: List[dict], limit: int = TOP_DEALS) -> List[dict]:
+    def sort_key(entry: dict):
         price = entry.get("price")
         price = price if isinstance(price, (int, float)) and price > 0 else float("inf")
         year = entry.get("year") or 0
         mileage = entry.get("mileage")
         mileage = mileage if isinstance(mileage, (int, float)) and mileage >= 0 else float("inf")
         return (price, -year, mileage)
-
     return sorted(listings, key=sort_key)[:limit]
 
 
-def load_description_cache(path: Path = DESCRIPTION_CACHE_PATH):
-    """Return cached descriptions keyed by ad_id."""
-    if not path.exists():
+def load_description_cache() -> dict:
+    if not DESCRIPTION_CACHE_PATH.exists():
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(DESCRIPTION_CACHE_PATH.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
 
 
-def save_description_cache(cache: dict, path: Path = DESCRIPTION_CACHE_PATH):
-    """Persist the description cache, ignoring write failures."""
+def save_description_cache(cache: dict) -> None:
     try:
-        path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+        DESCRIPTION_CACHE_PATH.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
 
@@ -481,14 +433,12 @@ def cache_entry_valid(entry: dict) -> bool:
     return datetime.datetime.utcnow() - fetched <= DESCRIPTION_CACHE_TTL
 
 
-def fetch_listing_details(url):
-    """Fetch listing page and extract description."""
+def fetch_listing_details(url: str) -> dict:
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
     except Exception as e:
         return {"description": f"Failed to fetch page: {e}"}
-
     soup = BeautifulSoup(resp.text, "html.parser")
     description = ""
     meta = soup.find("meta", attrs={"name": "description"})
@@ -499,39 +449,44 @@ def fetch_listing_details(url):
         if meta and meta.get("content"):
             description = meta.get("content", "").strip()
     title = soup.find("title")
-    title_text = title.text.strip() if title else ""
-    return {"description": description, "title": title_text}
+    return {"description": description, "title": title.text.strip() if title else ""}
 
 
 # ---------- MAIN --------------------------------------------------------------------
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Summarise Tesla listings")
+    parser = argparse.ArgumentParser(description="Summarise Finn.no listings with an LLM")
+    parser.add_argument("--search", metavar="NAME", required=True,
+                        help="Search name from searches.yaml (e.g. tesla_model_y)")
     parser.add_argument("--verbose", action="store_true", help="Show progress messages")
-    parser.add_argument(
-        "--use-llm-shortlist",
-        action="store_true",
-        help="Use the first-pass LLM to shortlist listings (default: heuristic only)",
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default=None,
-        help="Write summary to this path in addition to a dated file",
-    )
+    parser.add_argument("--use-llm-shortlist", action="store_true",
+                        help="Use a first-pass LLM to shortlist before ranking (default: heuristics only)")
+    parser.add_argument("--output", type=str, default=None,
+                        help="Extra output path in addition to the dated summary file")
     args = parser.parse_args()
 
-    listings = load_delta(DELTA_PATH)
+    searches = load_searches()
+    search_cfg = next((s for s in searches if s["name"] == args.search), None)
+    if not search_cfg:
+        print(f"No search named '{args.search}' in searches.yaml")
+        sys.exit(1)
+
+    llm_cfg: Dict[str, Any] = search_cfg.get("llm", {"provider": "openai"})
+    llm_context: str = search_cfg.get("llm_context", "Evaluate and rank the following listings.")
+
+    listings = load_delta(args.search)
+    today = datetime.date.today().isoformat()
+    default_output = Path(f"summary - {args.search} - {today}.txt")
 
     if not listings:
         summary = "No new or changed listings today."
     else:
-        shortlisted = []
+        shortlisted: List[dict] = []
 
         if args.use_llm_shortlist:
             if args.verbose:
                 print("Calling initial LLM shortlist...")
-            formatted_listing_text = format_listings(listings, show_progress=args.verbose)
-            first_response = call_initial_prompt(formatted_listing_text, len(listings))
+            formatted = format_listings(listings, show_progress=args.verbose)
+            first_response = call_initial_prompt(formatted, len(listings), llm_context, llm_cfg)
             ids, urls = parse_selected_ids(first_response)
             for entry in tqdm(listings, desc="Filtering LLM shortlist", disable=not args.verbose):
                 if str(entry.get("ad_id")) in ids or entry.get("url") in urls:
@@ -542,8 +497,6 @@ if __name__ == "__main__":
                 print("LLM shortlist empty; falling back to heuristics.")
 
         if not shortlisted:
-            if args.verbose and args.use_llm_shortlist:
-                print("Using heuristic shortlist.")
             shortlisted = shortlist_by_heuristics(listings, TOP_DEALS)
 
         if args.verbose:
@@ -577,21 +530,25 @@ if __name__ == "__main__":
             entry.setdefault("description", "")
 
         listings_with_desc = format_listings_with_description(shortlisted, show_progress=args.verbose)
-        summary = call_ranking_prompt(listings_with_desc)
-        baggage_specs = gather_baggage_specs(shortlisted, show_progress=args.verbose)
-        baggage_section = format_baggage_section(baggage_specs)
-        if baggage_section:
-            summary = f"{summary}\n\n{baggage_section}"
+        summary = call_ranking_prompt(listings_with_desc, llm_context, llm_cfg)
+
+        # Baggage web search is OpenAI-specific (Responses API with web_search tool)
+        if llm_cfg.get("provider") == "openai":
+            baggage_specs = gather_baggage_specs(shortlisted, show_progress=args.verbose)
+            baggage_section = format_baggage_section(baggage_specs)
+            if baggage_section:
+                summary = f"{summary}\n\n{baggage_section}"
 
     print(summary)
-    output_targets = {DEFAULT_OUTPUT_PATH}
+    output_targets = {default_output}
     if args.output:
         output_targets.add(Path(args.output))
 
     for target in output_targets:
         try:
             target.write_text(summary, encoding="utf-8")
-            print(f"Summary saved to {target}")
+            if args.verbose:
+                print(f"Summary saved to {target}")
         except Exception as exc:
             if args.verbose:
                 print(f"Failed to write summary to {target}: {exc}")

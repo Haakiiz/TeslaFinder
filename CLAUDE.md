@@ -7,46 +7,55 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Setup (first time):
 ```bash
 python3 -m venv venv
-source venv/bin/activate          # Windows: venv\Scripts\activate
+source venv/bin/activate
 pip install -r requirements.txt
 playwright install chromium
 ```
 
-Run the scraper (writes to `listings.db` and `delta_listings.json`):
+Run all configured searches (writes `delta_<name>.json` per search):
 ```bash
 python scrape.py
 ```
 
-Run the LLM summariser over the latest delta:
+Run a single search:
 ```bash
-python LLM_Summariser.py
+python scrape.py --search tesla_model_y
 ```
 
-Tests (pytest):
+Summarise with LLM (reads `delta_<name>.json`, writes `summary - <name> - <date>.txt`):
 ```bash
-pytest                                       # all tests
-pytest tests/test_colors.py                  # single file
-pytest tests/test_llm_summariser.py::<name>  # single test
+python LLM_Summariser.py --search tesla_model_y [--verbose] [--use-llm-shortlist]
 ```
 
-Inspect the DB: open `listings.db` in DB Browser for SQLite (`.lnk` shortcut in repo).
+Tests:
+```bash
+pytest                                        # all tests
+pytest tests/test_colors.py                   # single file
+pytest tests/test_llm_summariser.py::<name>   # single test
+```
 
 ## Architecture
 
-The pipeline is a two-stage batch job, run on demand:
+The pipeline is a two-stage batch job, run manually by the user.
 
-1. **`scrape.py`** — Playwright (headless Chromium) hits `BASE_URL` on finn.no (hardcoded car-search URL with body type, fuel, location, price/mileage/year filters baked into the query string at lines 23–29). Listings are parsed into `Listing` dataclasses, filtered against `buy_box.yaml`, and upserted into SQLite. A row is considered a "delta" only if `ad_id` is new or `price`/`mileage` changed (hash-based). Old rows are pruned after `RETENTION_DAYS` (30). Output:
-   - `listings.db` — durable state, one row per `ad_id`
-   - `delta_listings.json` — only the new/changed listings from this run, consumed downstream
-   - `listing_cache.json` — per-ad scraped descriptions, keyed by `ad_id`, used by the summariser
+**Configuration — `searches.yaml`** is the single source of truth for all searches. Each entry has:
+- `finn_url` — the full Finn.no search URL (copy from browser)
+- `filters` — optional: `price_max`, `year_min`, `mileage_max`, `exclude_keywords`, `color`
+- `llm.provider` — `openai`, `claude`, or `grok`
+- `llm_context` — plain-text brief given to the LLM as its evaluation instructions
 
-2. **`LLM_Summariser.py`** — Reads `delta_listings.json`, fetches full ad pages with `requests` + BeautifulSoup, builds a prompt (see `INITIAL_PROMPT_TEMPLATE`), and calls OpenAI to shortlist top deals. Uses `pydantic` for structured response validation. Writes `summary - YYYY-MM-DD.txt`. Reads `OPENAI_API_KEY` (and other keys) from `.env` via `python-dotenv`.
+**Stage 1 — `scrape.py`**: Playwright (headless Chromium) paginates over each `finn_url`. Listings are parsed into `Listing` dataclasses via regex against Finn.no's HTML (price, year/mileage, location, title). Each listing is checked against `filters`, then upserted into `listings.db`. A listing is a "delta" only if its `ad_id` is new or `price`/`mileage` changed. Output: `delta_<name>.json` per search. Old rows are pruned at 30 days.
 
-**Key coupling to be aware of:** Both the search URL (`scrape.py` line 24) and the HTML/regex extractors (price/year/mileage parsing) are hardcoded for finn.no's `/mobility/search/car` category. Any non-car search target requires a different URL, different selectors, and likely different `Listing` fields.
+**Stage 2 — `LLM_Summariser.py`**: Reads `delta_<name>.json`, optionally shortlists with a cheap LLM pass (heuristic by default: price↑, year↓, mileage↑), fetches ad descriptions from Finn.no, then calls the ranking LLM with the `llm_context` from config. Supports three providers via `call_llm()` in `llm_cfg`:
+- `openai` → `openai.OpenAI().chat.completions.create`
+- `claude` → `anthropic.Anthropic().messages.create`
+- `grok` → `openai.OpenAI(base_url="https://api.x.ai/v1")` (OpenAI-compatible)
 
-**Buy-box filter (`buy_box.yaml`):** vehicle-shaped — `price_max`, `year_min`, `mileage_max`, `must_include_images`, `exclude_keywords`. Color filtering supports Norwegian synonyms (e.g. "svart" = "black"); see `tests/test_colors.py` for the mapping.
+The trunk/baggage web-search step uses OpenAI's Responses API and only runs when `provider: openai`.
 
-**State:** all state is local files in the repo root (`listings.db`, `*.json`, `summary - *.txt`). There is no scheduler, notifier, or remote sync — the README's "Planned & Not Yet Completed" section (notifier, cron, geo-radius, multi-model support) is still accurate.
+**DB schema** (`listings.db`, table `listings`): primary key is `(ad_id, search_name)` so different searches never collide. Legacy rows from before the multi-search refactor have `search_name='tesla_model_y'` (migrated automatically).
+
+**Key coupling:** The HTML regex in `Listing.from_card()` targets Finn.no's shared card structure (CSS classes `sf-search-ad-link`, `t3 font-bold inline-block`, `text-detail flex-col flex s-text-subtle`). Year/mileage parsing assumes the `YYYY • NNN km` pattern common to vehicle and some other categories. Non-vehicle searches that lack year/mileage will parse those as 0 and the optional filters will skip those checks.
 
 ## Branch policy
 

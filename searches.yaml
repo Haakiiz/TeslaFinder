@@ -1,0 +1,40 @@
+searches:
+
+  - name: tesla_model_y
+    description: "Tesla Model Y, Østlandet, maks 500k NOK"
+    finn_url: >-
+      https://www.finn.no/mobility/search/car
+      ?body_type=2&body_type=3&body_type=4&body_type=11&fuel=4
+      &location=0.20002&location=0.20061&location=0.22034&location=0.20007&location=0.20003
+      &mileage_to=100000&price_to=350000&registration_class=1
+      &sales_form=2&sales_form=1&year_from=2020
+    filters:
+      price_max: 500000
+      year_min: 2019
+      mileage_max: 100000
+      exclude_keywords:
+        - "import"
+        - "skadet"
+        - "tidligere takst"
+    llm:
+      provider: openai      # openai | claude | grok
+      # model: gpt-4o       # uncomment to override default for this provider
+    llm_context: |
+      Evaluate used Tesla Model Y listings in Norway for a family with a young child.
+      Prioritize: lower price, newer model year, lower mileage, good trunk space for a stroller.
+      Always include at least one Tesla Model Y if present in the list.
+
+  # ---------- EXAMPLE: uncomment and edit to add a new search ----------
+  # - name: baby_chair
+  #   description: "Brukt barnestol, Østlandet, maks 1500 NOK"
+  #   finn_url: "https://www.finn.no/recommerce/forsale/search?q=barnestol&location=0.20002"
+  #   filters:
+  #     price_max: 1500
+  #     exclude_keywords:
+  #       - "skadet"
+  #       - "ødelagt"
+  #   llm:
+  #     provider: claude      # openai | claude | grok
+  #   llm_context: |
+  #     Evaluate used baby/toddler high chairs in Norway.
+  #     Prioritize safety, good condition, and price.
