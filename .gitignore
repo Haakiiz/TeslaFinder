@@ -1,0 +1,22 @@
+# Secrets
+.env
+
+# Generated / runtime files
+seats.db
+listings.db
+delta_listings.json
+listing_cache.json
+summary - *.txt
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.idea/
+.vscode/
+
+# Claude Code internals
+.claude/
