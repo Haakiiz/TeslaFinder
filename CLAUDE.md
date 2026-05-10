@@ -62,3 +62,21 @@ The trunk/baggage web-search step uses OpenAI's Responses API and only runs when
 There is **one branch model**: `master` holds the generic multi-search codebase. Different searches (Tesla, baby chair, etc.) are NOT separate branches — they are entries in `searches.yaml`. Do not create per-search branches; add a new entry to `searches.yaml` instead.
 
 When working in a Claude Code session, develop on `claude/flexible-multi-item-search-2tZYo` (or whichever feature branch the user is on) and do not push to `master` without explicit permission.
+
+## Git Workflow
+
+Empirically, direct pushes to `master` from this sandbox return HTTP 403 (branch protection or ruleset enforced). Always follow this flow:
+
+1. **Branch from `master`** (or the active feature branch the user named). Never commit directly on `master`.
+2. **Open a PR** via the GitHub MCP (`mcp__github__create_pull_request`). Never attempt `git push origin master`.
+3. **Auto-merge when CI is green** — the user has opted in. Use `mcp__github__enable_pr_auto_merge` after PR creation so the PR merges itself once checks pass. If there are no CI checks configured, merge manually with `mcp__github__merge_pull_request` after the user confirms.
+4. **Auto-delete the branch** on merge (use `delete_branch: true` on the merge call, or rely on the repo setting if enabled).
+5. **Cannot delete remote branches from sandbox** — if a branch needs deleting outside an auto-merge, ask the user to do it via the GitHub UI.
+
+### Audience
+
+Documentation (README, comments, setup instructions) is written for a beginner audience. Assume the reader is new to Python, Git, and CLI tools. Prefer Norwegian for user-facing prose in `README.md` (matches the existing style); keep `CLAUDE.md` and code comments in English.
+
+### Refactoring
+
+When renaming functions or symbols, update ALL imports and call sites in the same change, then run `pytest` before committing. Project-wide symbol search first; rename second.
