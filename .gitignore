@@ -4,9 +4,11 @@
 # Generated / runtime files
 seats.db
 listings.db
-delta_listings.json
-listing_cache.json
 summary - *.txt
+
+# Tracked state (shared between machines):
+# - delta_listings.json (latest scrape output)
+# - listing_cache.json (FINN description cache, 12h TTL per entry)
 
 # Python
 .venv/
