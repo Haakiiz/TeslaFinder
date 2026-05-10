@@ -132,6 +132,9 @@ BAGGAGE_JSON_SCHEMA = {
 SEARCHES_PATH = Path("searches.yaml")
 DESCRIPTION_CACHE_PATH = Path("listing_cache.json")
 DESCRIPTION_CACHE_TTL = datetime.timedelta(hours=12)
+# Bumped when the description extraction logic changes so stale entries
+# (e.g. truncated meta-tag descriptions) are refetched automatically.
+DESCRIPTION_CACHE_VERSION = 2
 TOP_DEALS = 10
 
 
@@ -423,6 +426,8 @@ def save_description_cache(cache: dict) -> None:
 
 
 def cache_entry_valid(entry: dict) -> bool:
+    if entry.get("version") != DESCRIPTION_CACHE_VERSION:
+        return False
     timestamp = entry.get("fetched_at")
     if not timestamp:
         return False
@@ -433,23 +438,85 @@ def cache_entry_valid(entry: dict) -> bool:
     return datetime.datetime.utcnow() - fetched <= DESCRIPTION_CACHE_TTL
 
 
+def extract_description_from_html(html: str) -> str:
+    """Pull the full ad description out of a Finn.no listing page.
+
+    Finn.no truncates the meta description tag (~155 chars), so prefer the
+    Next.js JSON payload and the on-page expandable section, which carry the
+    full seller-written body. Falls back to meta tags as a last resort.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    # 1. Next.js embeds the full ad in a __NEXT_DATA__ script tag.
+    next_data = soup.find("script", id="__NEXT_DATA__")
+    if next_data and next_data.string:
+        try:
+            payload = json.loads(next_data.string)
+        except (json.JSONDecodeError, TypeError):
+            payload = None
+        if payload is not None:
+            found = _find_longest_description(payload)
+            if found:
+                return found
+
+    # 2. The rendered DOM often exposes the description via data-testid.
+    for testid in ("description", "expandable-text", "object-description"):
+        node = soup.find(attrs={"data-testid": testid})
+        if node:
+            text = node.get_text(separator="\n", strip=True)
+            if text and len(text) > 40:
+                return text
+
+    # 3. Section headed by a "Beskrivelse" heading.
+    for heading in soup.find_all(["h2", "h3"]):
+        if heading.get_text(strip=True).lower().startswith("beskrivelse"):
+            section = heading.find_parent("section") or heading.parent
+            if section:
+                text = section.get_text(separator="\n", strip=True)
+                if text and len(text) > 40:
+                    return text
+
+    # 4. Fallback: truncated meta description.
+    for attrs in ({"name": "description"}, {"property": "og:description"}):
+        meta = soup.find("meta", attrs=attrs)
+        if meta and meta.get("content"):
+            return meta["content"].strip()
+
+    return ""
+
+
+def _find_longest_description(node: Any) -> str:
+    """Walk a JSON tree, returning the longest string under a description-ish key."""
+    best = ""
+    description_keys = {"description", "descriptionText", "bodyText", "body", "fullDescription"}
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            for key, value in current.items():
+                if key in description_keys and isinstance(value, str):
+                    text = value.strip()
+                    if len(text) > len(best):
+                        best = text
+                elif isinstance(value, (dict, list)):
+                    stack.append(value)
+        elif isinstance(current, list):
+            stack.extend(current)
+    return best
+
+
 def fetch_listing_details(url: str) -> dict:
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
     except Exception as e:
         return {"description": f"Failed to fetch page: {e}"}
-    soup = BeautifulSoup(resp.text, "html.parser")
-    description = ""
-    meta = soup.find("meta", attrs={"name": "description"})
-    if meta and meta.get("content"):
-        description = meta.get("content", "").strip()
-    if not description:
-        meta = soup.find("meta", attrs={"property": "og:description"})
-        if meta and meta.get("content"):
-            description = meta.get("content", "").strip()
-    title = soup.find("title")
-    return {"description": description, "title": title.text.strip() if title else ""}
+    description = extract_description_from_html(resp.text)
+    title_match = BeautifulSoup(resp.text, "html.parser").find("title")
+    return {
+        "description": description,
+        "title": title_match.text.strip() if title_match else "",
+    }
 
 
 # ---------- MAIN --------------------------------------------------------------------
@@ -521,6 +588,7 @@ if __name__ == "__main__":
                 "description": entry.get("description", ""),
                 "title": entry.get("title"),
                 "fetched_at": datetime.datetime.utcnow().isoformat(),
+                "version": DESCRIPTION_CACHE_VERSION,
             }
 
         if to_fetch:
