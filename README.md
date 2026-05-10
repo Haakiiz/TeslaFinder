@@ -131,7 +131,7 @@ Dette lager en fil `delta_barnestol.json` med alle nye/endrede annonser.
 python LLM_Summariser.py --search barnestol
 ```
 
-Resultatet vises i terminalen og lagres i `summary - barnestol - 2026-05-09.txt`.
+Resultatet vises i terminalen og lagres i `summary - barnestol - <dato>.txt` (datoen settes automatisk til når du kjørte den).
 
 Legg til `--verbose` hvis du vil se framdrift mens den jobber.
 
