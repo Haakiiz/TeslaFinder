@@ -1,6 +1,11 @@
+import json
 import unittest
 
-from LLM_Summariser import parse_selected_ids, shortlist_by_heuristics
+from LLM_Summariser import (
+    extract_description_from_html,
+    parse_selected_ids,
+    shortlist_by_heuristics,
+)
 
 
 class TestSummariserHelpers(unittest.TestCase):
@@ -22,6 +27,34 @@ class TestSummariserHelpers(unittest.TestCase):
         ]
         result = shortlist_by_heuristics(listings, limit=2)
         self.assertEqual([item["ad_id"] for item in result], ["3", "2"])
+
+
+    def test_extract_description_prefers_next_data_over_meta(self):
+        full_text = "Velholdt Tesla Model Y med varmepumpe. " * 20
+        next_data = {"props": {"pageProps": {"ad": {"description": full_text}}}}
+        html = f"""
+        <html><head>
+          <meta name="description" content="Velholdt Tesla Model Y med...">
+        </head><body>
+          <script id="__NEXT_DATA__" type="application/json">{json.dumps(next_data)}</script>
+        </body></html>
+        """
+        result = extract_description_from_html(html)
+        self.assertEqual(result, full_text.strip())
+
+    def test_extract_description_falls_back_to_expandable_text(self):
+        body = "Bilen er nybesiktiget og har full servicehistorikk hos Tesla. " * 5
+        html = f"""
+        <html><body>
+          <div data-testid="expandable-text">{body}</div>
+        </body></html>
+        """
+        result = extract_description_from_html(html)
+        self.assertIn("servicehistorikk", result)
+
+    def test_extract_description_falls_back_to_meta_when_nothing_else(self):
+        html = '<html><head><meta name="description" content="kort tekst"></head></html>'
+        self.assertEqual(extract_description_from_html(html), "kort tekst")
 
 
 if __name__ == "__main__":
